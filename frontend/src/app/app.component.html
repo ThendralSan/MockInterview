@@ -1,0 +1,355 @@
+<div class="copilot-container">
+  <!-- TOP NAVIGATION BAR -->
+  <header class="copilot-header">
+    <div class="brand">
+      <span class="brand-icon">🦜</span>
+      <div>
+        <h1 class="brand-title">Parakeet Copilot</h1>
+        <span class="brand-subtitle">Real-Time Technical Interview Assistant</span>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <!-- Latency Metric -->
+      <div *ngIf="lastGenerationLatency > 0" class="latency-badge" title="Response generation time">
+        ⚡ {{ (lastGenerationLatency / 1000) | number:'1.1-2' }}s
+      </div>
+
+      <!-- Online status -->
+      <div class="status-pill" [class.online]="isConnected" [class.offline]="!isConnected">
+        <span class="pulse-dot"></span>
+        {{ isConnected ? 'Online' : 'Disconnected' }}
+      </div>
+
+      <!-- Auto-Answer ON/OFF Toggle -->
+      <button 
+        class="action-btn auto-answer-btn" 
+        [class.active]="autoAnswerEnabled"
+        [class.manual]="!autoAnswerEnabled"
+        (click)="toggleAutoAnswer()"
+        title="Toggle automatic answer generation on/off">
+        <span *ngIf="autoAnswerEnabled">⚡ Auto-Answer: ON</span>
+        <span *ngIf="!autoAnswerEnabled">✋ Auto-Answer: OFF (Manual)</span>
+      </button>
+
+      <!-- Headset Auto-TTS toggle -->
+      <button 
+        class="action-btn" 
+        [class.active]="preferences.audioSettings.autoTts"
+        (click)="toggleAutoTts()"
+        title="Automatically whispers answers into your headset">
+        🎧 Headset Audio: {{ preferences.audioSettings.autoTts ? 'ON' : 'OFF' }}
+      </button>
+
+      <!-- Audio Stop if speaking -->
+      <button 
+        *ngIf="isSpeaking" 
+        class="action-btn speaking-btn" 
+        (click)="stopSpeaking()"
+        title="Stop speaking current answer">
+        🔇 Stop Audio
+      </button>
+
+      <!-- Settings button -->
+      <button class="action-btn" (click)="showSettingsModal = true" title="Configure Profile">
+        ⚙ Profile
+      </button>
+
+      <!-- Emergency Stop Button -->
+      <button class="action-btn danger-btn" (click)="emergencyStop()" title="Emergency halt for audio and mic">
+        🛑 Stop
+      </button>
+    </div>
+  </header>
+
+  <!-- TOAST FEEDBACK -->
+  <div *ngIf="copiedFeedback" class="feedback-toast">
+    {{ copiedFeedback }}
+  </div>
+
+  <!-- MAIN WORKSPACE LAYOUT -->
+  <main class="copilot-layout">
+    <!-- LEFT COLUMN: LIVE CAPTURE & ANSWER -->
+    <section class="assistant-column">
+      
+      <!-- AUDIO CAPTURE CARD -->
+      <div class="card capture-card">
+        <div class="capture-top">
+          <div class="source-selector">
+            <span class="card-label">Audio Source:</span>
+            <button 
+              class="source-tab" 
+              [class.active]="audioSource === 'MICROPHONE'"
+              (click)="switchAudioSource('MICROPHONE')">
+              🎙 Microphone
+            </button>
+            <button 
+              class="source-tab" 
+              [class.active]="audioSource === 'SYSTEM_AUDIO'"
+              (click)="switchAudioSource('SYSTEM_AUDIO')"
+              title="Capture interviewer directly from Zoom/Teams/Meet tab">
+              🖥 Meeting Audio (Zoom/Teams/Meet Tab)
+            </button>
+            <!-- Microphone Sensitivity Booster -->
+            <button 
+              class="source-tab sensitivity-pill"
+              (click)="cycleMicSensitivity()"
+              title="Click to toggle Mic Sensitivity Booster (Normal, High, Max)">
+              ⚡ Mic Boost: {{ micSensitivityLevel }} ({{ audioEngine.micGainMultiplier }}x)
+            </button>
+          </div>
+
+          <!-- Quick Auto-Answer Pill in Capture Card -->
+          <div class="auto-answer-status" [class.is-on]="autoAnswerEnabled" (click)="toggleAutoAnswer()">
+            <span class="status-dot"></span>
+            <span>Auto-Answer: <strong>{{ autoAnswerEnabled ? 'ON (Smart Auto-Trigger)' : 'OFF (Manual Trigger)' }}</strong></span>
+          </div>
+        </div>
+
+        <!-- Real-time Volume Level Meter -->
+        <div *ngIf="isListening" class="audio-level-container">
+          <span class="meter-label">Audio Signal:</span>
+          <div class="meter-bar-track">
+            <div 
+              class="meter-bar-fill" 
+              [style.width.%]="audioEngine.audioLevel"
+              [class.active-speech]="audioEngine.isSpeechActive">
+            </div>
+          </div>
+          <span class="meter-val">{{ audioEngine.isSpeechActive ? 'Voice Detected' : 'Listening...' }}</span>
+        </div>
+
+        <!-- Intelligent Speech & Sentence State Banner -->
+        <div *ngIf="speechStateMessage" class="speech-state-banner" [class.warning-banner]="!autoAnswerEnabled">
+          {{ speechStateMessage }}
+        </div>
+
+        <!-- Interim Speech Preview -->
+        <div *ngIf="interimTranscript" class="interim-preview">
+          <em>Hearing:</em> "{{ interimTranscript }}"
+        </div>
+
+        <div class="input-row">
+          <textarea 
+            [(ngModel)]="question" 
+            rows="2" 
+            placeholder="Continuous audio captures interviewer voice automatically, or type question here... (Alt+Enter to send)"
+            (keydown.enter)="$event.preventDefault(); askQuestion()"
+            class="question-input">
+          </textarea>
+
+          <div class="input-controls">
+            <!-- Mic Continuous Toggle -->
+            <button 
+              *ngIf="speechSupported"
+              (click)="toggleListening()" 
+              class="mic-toggle-btn"
+              [class.is-recording]="isListening">
+              <span *ngIf="!isListening">🎙 Start Capture</span>
+              <span *ngIf="isListening">⏹ Stop Capture</span>
+            </button>
+
+            <!-- Instant Answer button -->
+            <button 
+              (click)="askQuestion()" 
+              [disabled]="loading || !question.trim()"
+              class="instant-btn"
+              title="Shortcut: Alt+Enter">
+              ⚡ Answer Now
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- STREAMING IN PROGRESS -->
+      <div *ngIf="loading" class="card loading-card">
+        <div class="loader-spinner"></div>
+        <div class="loading-content">
+          <h3>⚡ Listening & Generating Answer...</h3>
+          <p *ngIf="!streamingAnswerText" class="streaming-note">Structuring direct, hands-on answer based on your real-world experience...</p>
+          <div *ngIf="streamingAnswerText" class="streaming-live-box">
+            "{{ streamingAnswerText }}"
+          </div>
+        </div>
+      </div>
+
+      <!-- SINGLE CLEAN ANSWER CARD (NO UNNECESSARY SECTIONS) -->
+      <div *ngIf="aiResponse && !loading" class="card answer-card">
+        <div class="answer-header">
+          <div class="badges-row">
+            <span class="category-badge" [ngClass]="'badge-' + (aiResponse.category.toLowerCase().replace(' ', '-'))">{{ aiResponse.category }}</span>
+            <span *ngIf="aiResponse.latencyMs" class="latency-pill">
+              ⚡ Generated in {{ (aiResponse.latencyMs / 1000) | number:'1.1-2' }}s
+            </span>
+          </div>
+          <div class="answer-actions">
+            <button 
+              *ngIf="ttsSupported" 
+              class="icon-btn" 
+              (click)="speakAnswer(aiResponse.answer)"
+              title="Play answer in headset">
+              🔊 Re-play Audio
+            </button>
+            <button 
+              class="icon-btn" 
+              (click)="copyToClipboard(aiResponse.answer, 'Answer')"
+              title="Copy answer to clipboard">
+              📋 Copy
+            </button>
+          </div>
+        </div>
+
+        <!-- Question echoed -->
+        <div class="echoed-question">
+          <strong>Interviewer asked:</strong> "{{ aiResponse.question }}"
+        </div>
+
+        <!-- THE ANSWER (NATURAL, EXPERIENCE-BASED, DIRECT) -->
+        <div class="spoken-container">
+          <div class="spoken-label">
+            <span>🗣 WHAT TO SAY (Hands-On Experience):</span>
+          </div>
+          <p class="spoken-text">
+            {{ aiResponse.answer }}
+          </p>
+        </div>
+
+        <!-- QUICK CUES (MENTAL ANCHORS) -->
+        <div *ngIf="aiResponse.bulletPoints && aiResponse.bulletPoints.length > 0" class="cues-section">
+          <span class="cues-title">Key Points / Takeaways:</span>
+          <ul class="cues-list">
+            <li *ngFor="let point of aiResponse.bulletPoints">{{ point }}</li>
+          </ul>
+        </div>
+
+        <!-- CODE PANEL (ONLY DISPLAYED IF THE QUESTION SPECIFICALLY ASKED FOR CODE) -->
+        <div *ngIf="aiResponse.code && aiResponse.code.snippet" class="code-container">
+          <div class="code-header">
+            <span class="code-lang">💻 Code ({{ aiResponse.code.language | uppercase }})</span>
+            <button class="icon-btn" (click)="copyToClipboard(aiResponse.code.snippet, 'Code')">Copy Code</button>
+          </div>
+          <pre class="code-block"><code>{{ aiResponse.code.snippet }}</code></pre>
+        </div>
+      </div>
+
+      <!-- EMPTY STATE -->
+      <div *ngIf="!aiResponse && !loading" class="card empty-state-card">
+        <span class="empty-icon">🎯</span>
+        <h3>Parakeet Copilot Ready</h3>
+        <p>Click <strong>Start Capture</strong> or select <strong>Meeting Audio</strong> to listen to the interview.</p>
+        <p class="empty-tip">Answers appear within 1–2 seconds and sound like authentic, real-world development experience.</p>
+      </div>
+    </section>
+
+    <!-- RIGHT COLUMN: SESSION HISTORY -->
+    <aside class="history-column">
+      <div class="card history-card">
+        <div class="history-header">
+          <div>
+            <h3 class="history-title">Session History</h3>
+            <span class="history-subtitle">{{ history.length }} Questions Logged</span>
+          </div>
+          <button 
+            *ngIf="history.length > 0" 
+            class="clear-history-btn" 
+            (click)="clearHistory()"
+            title="Clear question history">
+            Clear
+          </button>
+        </div>
+
+        <div class="history-list" *ngIf="history.length > 0">
+          <div 
+            *ngFor="let item of history.slice().reverse()" 
+            class="history-item"
+            [class.selected]="selectedHistoryId === item.id"
+            (click)="selectHistoryItem(item)">
+            <div class="history-item-top">
+              <span class="history-item-category" [ngClass]="'badge-' + (item.category.toLowerCase().replace(' ', '-'))">{{ item.category }}</span>
+              <span class="history-item-time">{{ item.timestamp | date:'shortTime' }}</span>
+            </div>
+            <div class="history-item-question">
+              {{ item.question }}
+            </div>
+            <div class="history-item-preview">
+              {{ item.answer | slice:0:70 }}...
+            </div>
+          </div>
+        </div>
+
+        <div *ngIf="history.length === 0" class="history-empty">
+          <p>No questions asked yet.</p>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- SETTINGS MODAL -->
+  <div *ngIf="showSettingsModal" class="modal-backdrop">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>⚙ Candidate Experience Profile</h2>
+        <button class="modal-close-btn" (click)="showSettingsModal = false">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="form-row">
+          <div class="form-group half">
+            <label>Target Role:</label>
+            <input type="text" [(ngModel)]="candidateProfile.targetRole" class="form-input">
+          </div>
+          <div class="form-group half">
+            <label>Years of Experience:</label>
+            <input type="number" [(ngModel)]="candidateProfile.experienceYears" class="form-input">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Primary Tech Stack (Embedded in real-world examples):</label>
+          <input type="text" [(ngModel)]="candidateProfile.primarySkills" class="form-input">
+        </div>
+
+        <div class="form-group">
+          <label>Secondary Tech Stack:</label>
+          <input type="text" [(ngModel)]="candidateProfile.secondarySkills" class="form-input">
+        </div>
+
+        <hr class="modal-divider">
+
+        <h3>Headset Audio Settings</h3>
+        <div class="form-group checkbox-group">
+          <label>
+            <input type="checkbox" [(ngModel)]="preferences.audioSettings.autoTts">
+            Automatically whisper answers into headset
+          </label>
+        </div>
+
+        <div class="form-row" *ngIf="voices.length > 0">
+          <div class="form-group half">
+            <label>Voice:</label>
+            <select [(ngModel)]="selectedVoiceURI" class="form-input">
+              <option *ngFor="let voice of voices" [value]="voice.voiceURI">
+                {{ voice.name }} ({{ voice.lang }})
+              </option>
+            </select>
+          </div>
+          <div class="form-group half">
+            <label>Speed: {{ preferences.audioSettings.speechRate }}x</label>
+            <input 
+              type="range" 
+              min="0.8" 
+              max="1.4" 
+              step="0.05" 
+              [(ngModel)]="preferences.audioSettings.speechRate" 
+              class="form-slider">
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="modal-btn secondary" (click)="showSettingsModal = false">Cancel</button>
+        <button class="modal-btn primary" (click)="savePreferences()">Save Profile</button>
+      </div>
+    </div>
+  </div>
+</div>

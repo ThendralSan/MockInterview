@@ -1,0 +1,171 @@
+AI Mock Interview Private Audio Assistant
+End-to-end technical design for a mock/practice interview system
+1. Requirement
+When an interviewer asks a question during a mock interview, the system should capture the spoken question, convert it to text, understand the question, generate a concise interview-ready answer, convert that answer to speech, and play it privately through the candidate's headset. Coding questions should additionally produce code and an explanation.
+2. Important scope
+This design is intended for mock interviews, practice sessions, demonstrations, or interviews where AI assistance is explicitly permitted. For a real hiring assessment, the system should only be used if the interviewer/employer allows such assistance.
+3. Target experience
+Interviewer asks: 'What is dependency injection in .NET?'
+Microphone captures the question.
+Speech-to-text produces the transcript.
+Question classifier identifies it as a .NET technical question.
+AI generates a short answer customized to the candidate's profile.
+Text-to-speech streams the answer.
+Candidate hears the answer in the headset.
+For coding questions, the answer is also displayed in a private coding panel.
+4. Recommended architecture
+Recommended stack: Angular frontend, ASP.NET Core backend, SignalR/WebSocket for realtime communication, streaming speech-to-text, an LLM API, streaming text-to-speech, SQL Server for interview/profile/history data, and a Windows audio output/headset.
+Architecture:
+Interviewer microphone
+        ↓
+Audio capture / realtime stream
+        ↓
+Speech-to-Text (streaming)
+        ↓
+Question detection + classifier
+        ↓
+AI orchestration service
+   ┌────┼───────────────┐
+   ↓    ↓               ↓
+Technical  Coding       HR/Behavioral
+   └────┼───────────────┘
+        ↓
+Answer generation
+        ↓
+Streaming Text-to-Speech
+        ↓
+Windows audio output
+        ↓
+Private headset
+5. How the answer reaches the headset
+The cleanest implementation is NOT to route the generated answer through a WhatsApp call. The application should receive the generated text, send it to a TTS service, receive audio chunks, and play those chunks directly to the selected Windows output device.
+Optional virtual audio routing can be added later using a virtual audio device such as Voicemeeter. This is useful when you need to control which application/device receives the audio.
+6. Audio pipeline
+A. Capture: microphone/meeting audio is captured by the permitted audio source.
+B. STT: streaming speech recognition converts speech into partial and final text.
+C. Finalization: when the interviewer pauses, the system decides the question is complete.
+D. AI: the question is sent to the LLM with the candidate profile and answer-format rules.
+E. TTS: the response is streamed into speech.
+F. Playback: audio is immediately queued to the headset.
+7. Latency target
+The system should be designed for approximately 1–4 seconds from the end of the question to the beginning of the spoken answer. Streaming is important. Do not wait for a complete long response before starting TTS.
+Speech recognition: roughly 300–1000 ms depending on network/provider.
+Question finalization: roughly 200–700 ms.
+LLM first-token/first-sentence latency: roughly 300–1500 ms.
+TTS first audio: roughly 200–800 ms.
+Playback: immediate after the first usable audio chunk.
+8. Question classification
+Use a fast classifier before the main answer prompt.
+TECHNICAL
+CODING
+SYSTEM DESIGN
+DATABASE / SQL
+.NET / C#
+ANGULAR / REACT
+AZURE / CLOUD
+PROJECT EXPERIENCE
+HR / BEHAVIORAL
+Example: 'What is dependency injection?' → .NET/Technical. 'Write a C# program to find duplicates.' → Coding. 'Explain your current project architecture.' → Project.
+9. Candidate profile
+Store a structured profile so the AI answers according to the candidate's actual experience instead of giving generic textbook answers.
+Example profile fields:
+Experience: 7 years
+Primary: C#, ASP.NET Core, Web API, EF Core, Angular, SQL Server, Azure
+Secondary: React, Microservices
+Target role: .NET Full Stack Developer
+Answer style: simple, practical, interview-friendly
+Preferred answer length: 20–40 seconds
+10. AI response contract
+Use structured output rather than returning only plain text.
+{
+  "category": "DOTNET",
+  "spokenAnswer": "Dependency Injection is a design pattern...",
+  "keyPoints": ["Loose coupling", "DI container", "Constructor injection"],
+  "code": null,
+  "followUp": "I can explain the DI lifetime types if needed."
+}
+11. Spoken answer rules
+Start with a direct definition.
+Give 2–3 important points.
+Use a practical example when useful.
+Avoid very long textbook answers.
+Use natural spoken English.
+Prefer 20–40 seconds for normal technical questions.
+If the interviewer asks a follow-up, answer only the follow-up instead of repeating the full explanation.
+12. Coding-question pipeline
+For coding questions, create two outputs: spoken explanation and visual code.
+Question → classify as CODING → identify language → generate solution → run/validate tests in a sandbox → return code + complexity + short explanation → TTS explains the approach → UI displays the code.
+Example question: 'Find duplicate numbers in an array.'
+Spoken: explain HashSet or GroupBy approach.
+Visual: display the complete C# solution.
+Validation: run sample test cases before presenting the result.
+13. Frontend
+Angular dashboard should contain: connection status, microphone/audio status, detected question, category, spoken-answer status, generated code, answer history, and a manual emergency stop.
+14. Backend services
+AudioSessionService – manages session state.
+SpeechService – STT integration.
+QuestionClassifierService – identifies question type.
+InterviewAIService – builds prompts and calls the LLM.
+CodeService – generates and validates coding answers.
+TtsService – converts answer text into streaming audio.
+ProfileService – loads candidate experience and skills.
+SignalRHub – pushes transcripts, answers, status, and code to Angular.
+InterviewHistoryService – stores practice-session data.
+15. Database design
+CandidateProfile
+InterviewSession
+Question
+GeneratedAnswer
+CodingSolution
+Technology
+PromptTemplate
+AnswerFeedback
+16. Audio routing options
+Option 1 – Direct headset output: simplest and recommended for MVP.
+Option 2 – Windows audio device selection: application chooses a dedicated headset/output device.
+Option 3 – Virtual audio mixer: use a virtual device such as Voicemeeter when you need advanced routing.
+Option 4 – WebRTC audio: useful for a browser-based realtime application, but more complex.
+17. WhatsApp role
+Do not make a normal WhatsApp voice call the core audio transport. A regular WhatsApp call does not provide a clean, general-purpose API for an application to inject arbitrary generated speech into the call. WhatsApp can be treated as a separate notification/messaging integration where supported, but the private headset audio should be handled by your application.
+18. Security and privacy
+Encrypt API keys and keep them on the backend.
+Never put LLM/STT/TTS provider secrets in Angular.
+Allow the user to stop audio capture immediately.
+Avoid storing raw interview audio unless required.
+Provide a session-delete function.
+Use explicit consent for mock interview participants whose voices are processed.
+19. Development phases
+Phase 1 – Text-only prototype: 
+Question → AI → answer shown on screen.
+Phase 2 – STT: 
+Microphone → transcript → answer.
+Phase 3 – TTS: 
+AI answer → headset audio.
+Phase 4 – Realtime: 
+Streaming STT + SignalR + streaming TTS.
+Phase 5 – Classifier: 
+Technical/Coding/HR/project routing.
+Phase 6 – Coding engine: 
+Code generation + sandbox validation + code display.
+Phase 7 – Personal profile: 
+Answers tailored to experience and target role.
+Phase 8 – Optimization: 
+Latency, interruption handling, caching, monitoring.
+20. Final recommended MVP
+Build a Windows/laptop-based Angular + ASP.NET Core application first. Use the laptop's permitted audio input for the mock interview, streaming STT, an LLM for answer generation, streaming TTS, and direct headset playback. Add SignalR for realtime UI updates. After this is stable, add coding validation and optional virtual audio routing.
+21. Example end-to-end flow
+Interviewer: 'What is React?'
+↓
+STT: What is React?
+↓
+Classifier: REACT / TECHNICAL
+↓
+AI: generates a 20–30 second practical answer
+↓
+TTS: streams speech
+↓
+Headset: candidate hears the answer
+↓
+Candidate gives the answer in the mock interview.
+22. Key design decision
+The critical idea is: WhatsApp is not required for the private audio path. The headset should be connected directly to the application/Windows audio output. This gives you lower latency, better reliability, easier debugging, and full control over the audio stream.

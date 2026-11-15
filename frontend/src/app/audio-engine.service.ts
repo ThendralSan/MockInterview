@@ -163,172 +163,256 @@ const TECH_TOPICS = new Set([
   'jwt', 'oauth', 'ci/cd', 'dapper', 'mediatr', 'signalr', 'blazor'
 ]);
 
-export type AudioInputSource = 'MICROPHONE' | 'SYSTEM_AUDIO';
+export type AudioInputSource = 'DUAL_AUDIO' | 'MICROPHONE' | 'SYSTEM_AUDIO';
 
 @Injectable({
   providedIn: 'root'
 })
 export class AudioEngineService {
-  private audioContext: AudioContext | null = null;
-  private analyser: AnalyserNode | null = null;
-  private gainNode: GainNode | null = null;
-  private mediaStream: MediaStream | null = null;
+  // Streams
+  public displayStream: MediaStream | null = null;
+  public micStream: MediaStream | null = null;
+
+  // Audio Contexts & Analysers for Dual Separation
+  private interviewerAudioContext: AudioContext | null = null;
+  private interviewerAnalyser: AnalyserNode | null = null;
+  private interviewerGain: GainNode | null = null;
+
+  private candidateAudioContext: AudioContext | null = null;
+  private candidateAnalyser: AnalyserNode | null = null;
+
+  private interviewerRecorder: MediaRecorder | null = null;
+  private recordedChunks: Blob[] = [];
+
   private animFrameId: number | null = null;
 
-  public currentSource: AudioInputSource = 'MICROPHONE';
-  public audioLevel: number = 0; // 0 to 100 for visual meter
-  public isSpeechActive: boolean = false;
+  public currentSource: AudioInputSource = 'DUAL_AUDIO';
   
-  // High input sensitivity booster multiplier (boosts soft or distant voices by default)
+  // Real-time audio levels (0 to 100 for meters)
+  public interviewerAudioLevel: number = 0;
+  public candidateAudioLevel: number = 0;
+
+  // Speech presence flags
+  public isInterviewerSpeaking: boolean = false;
+  public isCandidateSpeaking: boolean = false;
+
+  // Overall speech active (for backwards compat)
+  public get isSpeechActive(): boolean {
+    return this.isInterviewerSpeaking || this.isCandidateSpeaking;
+  }
+  public get audioLevel(): number {
+    return Math.max(this.interviewerAudioLevel, this.candidateAudioLevel);
+  }
+
+  // Sensitivity multiplier (default 1.8x)
   public micGainMultiplier: number = 1.8;
 
-  private onSilenceDetectedCallback: (() => void) | null = null;
-  private speechStartTime: number = 0;
-  private lastSpeechTime: number = 0;
-  
-  // Set to 2800ms so natural 2s mid-sentence pauses do not cut off the interviewer
-  public silenceThresholdMs: number = 2800;
+  private interviewerSpeechStartTime: number = 0;
+  private interviewerLastSpeechTime: number = 0;
+  private isRecordingInterviewer: boolean = false;
+  private segmentMaxTimer: any = null;
 
-  // Initialize hardware-constrained microphone capture with noise suppression and sensitivity gain
-  async startMicrophone(onSilenceDetected?: () => void): Promise<boolean> {
+  private onInterviewerSpeechCallback: ((blob: Blob) => void) | null = null;
+
+  // Silence threshold for interviewer speech (1600ms pause indicates end of thought/question)
+  public interviewerSilenceThresholdMs: number = 1600;
+
+  /**
+   * Starts Dual Audio Capture:
+   * - getDisplayMedia captures Meeting Tab Video + Audio (INTERVIEWER)
+   * - getUserMedia captures Microphone (CANDIDATE)
+   */
+  async startDualAudioCapture(
+    onInterviewerSpeechReady: (blob: Blob) => void,
+    onTabEnded?: () => void
+  ): Promise<{ success: boolean; displayStream?: MediaStream; micStream?: MediaStream; error?: string }> {
     this.stopAudio();
-    this.onSilenceDetectedCallback = onSilenceDetected || null;
-    this.currentSource = 'MICROPHONE';
+    this.currentSource = 'DUAL_AUDIO';
+    this.onInterviewerSpeechCallback = onInterviewerSpeechReady;
 
+    // 1. Capture Meeting Tab / Display Media with Audio
     try {
-      const constraints: MediaStreamConstraints = {
+      this.displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          displaySurface: 'browser'
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+    } catch (err: any) {
+      console.warn('[AudioEngine] Screen/Tab share cancelled:', err);
+      return { success: false, error: 'Screen/Tab sharing was cancelled or denied.' };
+    }
+
+    const audioTracks = this.displayStream.getAudioTracks();
+    if (audioTracks.length === 0) {
+      this.stopAudio();
+      return {
+        success: false,
+        error: 'No audio track detected! Please check "Also share tab audio" or "Share system audio" when selecting the meeting window.'
+      };
+    }
+
+    if (onTabEnded && this.displayStream.getVideoTracks().length > 0) {
+      this.displayStream.getVideoTracks()[0].onended = () => {
+        console.log('[AudioEngine] Tab sharing ended by user.');
+        onTabEnded();
+      };
+    }
+
+    // 2. Capture Candidate Microphone
+    try {
+      this.micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: { ideal: true },
           noiseSuppression: { ideal: true },
           autoGainControl: { ideal: true },
-          sampleRate: { ideal: 48000 },
-          channelCount: { ideal: 1 }
+          sampleRate: { ideal: 48000 }
         },
         video: false
+      });
+    } catch (err: any) {
+      console.warn('[AudioEngine] Candidate mic access error (will continue with tab audio):', err);
+    }
+
+    // 3. Initialize Audio Nodes & VAD loop
+    this.initDualAudioNodes();
+
+    return {
+      success: true,
+      displayStream: this.displayStream,
+      micStream: this.micStream || undefined
+    };
+  }
+
+  // Setup dual AudioContexts & analysers
+  private initDualAudioNodes() {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+
+    // A. Setup Interviewer Audio Nodes from display audio tracks
+    if (this.displayStream && this.displayStream.getAudioTracks().length > 0) {
+      try {
+        this.interviewerAudioContext = new AudioContextClass();
+        const tabAudioStream = new MediaStream(this.displayStream.getAudioTracks());
+        const source = this.interviewerAudioContext.createMediaStreamSource(tabAudioStream);
+
+        this.interviewerGain = this.interviewerAudioContext.createGain();
+        this.interviewerGain.gain.setValueAtTime(this.micGainMultiplier, this.interviewerAudioContext.currentTime);
+
+        this.interviewerAnalyser = this.interviewerAudioContext.createAnalyser();
+        this.interviewerAnalyser.fftSize = 512;
+        this.interviewerAnalyser.smoothingTimeConstant = 0.2;
+
+        source.connect(this.interviewerGain);
+        this.interviewerGain.connect(this.interviewerAnalyser);
+
+        this.setupInterviewerRecorder(tabAudioStream);
+      } catch (e) {
+        console.error('[AudioEngine] Error initializing Interviewer AudioContext:', e);
+      }
+    }
+
+    // B. Setup Candidate Audio Nodes from microphone
+    if (this.micStream && this.micStream.getAudioTracks().length > 0) {
+      try {
+        this.candidateAudioContext = new AudioContextClass();
+        const source = this.candidateAudioContext.createMediaStreamSource(this.micStream);
+
+        this.candidateAnalyser = this.candidateAudioContext.createAnalyser();
+        this.candidateAnalyser.fftSize = 512;
+        this.candidateAnalyser.smoothingTimeConstant = 0.2;
+
+        source.connect(this.candidateAnalyser);
+      } catch (e) {
+        console.error('[AudioEngine] Error initializing Candidate AudioContext:', e);
+      }
+    }
+
+    this.startDualVADLoop();
+  }
+
+  // Sets up MediaRecorder to capture clean audio chunks when interviewer speaks
+  private setupInterviewerRecorder(audioStream: MediaStream) {
+    try {
+      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+
+      this.interviewerRecorder = new MediaRecorder(audioStream, { mimeType: mime });
+      this.recordedChunks = [];
+
+      this.interviewerRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          this.recordedChunks.push(event.data);
+        }
       };
 
-      this.mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-      this.initAudioNodes(this.mediaStream);
-      return true;
-    } catch (err) {
-      console.error('[AudioEngine] Microphone access failed:', err);
-      return false;
-    }
-  }
-
-  // System/Tab Audio Share for crystal clear Zoom/Teams/Meet interviewer audio
-  async startSystemAudio(onSilenceDetected?: () => void): Promise<boolean> {
-    this.stopAudio();
-    this.onSilenceDetectedCallback = onSilenceDetected || null;
-    this.currentSource = 'SYSTEM_AUDIO';
-
-    try {
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true
+      this.interviewerRecorder.onstop = () => {
+        if (this.recordedChunks.length > 0) {
+          const blob = new Blob(this.recordedChunks, { type: mime });
+          this.recordedChunks = [];
+          if (this.onInterviewerSpeechCallback && blob.size > 2000) {
+            this.onInterviewerSpeechCallback(blob);
+          }
         }
-      });
-
-      const audioTracks = displayStream.getAudioTracks();
-      if (audioTracks.length === 0) {
-        alert('Please check "Share tab audio" or "Share system audio" when selecting the meeting window!');
-        this.stopAudio();
-        return false;
-      }
-
-      // Stop video track since we only need the interviewer's audio
-      displayStream.getVideoTracks().forEach(t => t.stop());
-
-      this.mediaStream = new MediaStream(audioTracks);
-      this.initAudioNodes(this.mediaStream);
-      return true;
-    } catch (err) {
-      console.warn('[AudioEngine] System audio capture cancelled or failed:', err);
-      return false;
+      };
+    } catch (e) {
+      console.warn('[AudioEngine] MediaRecorder not supported on this stream:', e);
     }
   }
 
-  // Sets mic gain sensitivity multiplier (e.g. 1.0 = Normal, 1.8 = High, 2.5 = Maximum)
-  public setSensitivityMultiplier(multiplier: number) {
-    this.micGainMultiplier = multiplier;
-    if (this.gainNode && this.audioContext) {
-      this.gainNode.gain.setValueAtTime(this.micGainMultiplier, this.audioContext.currentTime);
-    }
-  }
-
-  private initAudioNodes(stream: MediaStream) {
-    try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      this.audioContext = new AudioContextClass();
-      
-      const sourceNode = this.audioContext.createMediaStreamSource(stream);
-
-      // Create GainNode to boost sensitivity for quiet voices or distant laptop microphones
-      this.gainNode = this.audioContext.createGain();
-      this.gainNode.gain.setValueAtTime(this.micGainMultiplier, this.audioContext.currentTime);
-
-      this.analyser = this.audioContext.createAnalyser();
-      this.analyser.fftSize = 512;
-      this.analyser.smoothingTimeConstant = 0.2;
-
-      // Connect: Source -> Gain Booster -> Analyser
-      sourceNode.connect(this.gainNode);
-      this.gainNode.connect(this.analyser);
-
-      this.startVADLoop();
-    } catch (err) {
-      console.error('[AudioEngine] Failed to initialize AudioContext:', err);
-    }
-  }
-
-  // Real-time Voice Activity Detection (VAD) loop calculating RMS volume with boosted sensitivity
-  private startVADLoop() {
-    if (!this.analyser) return;
-
-    const buffer = new Uint8Array(this.analyser.frequencyBinCount);
+  // Dual Voice Activity Detection (VAD) Loop
+  private startDualVADLoop() {
+    const intBuffer = this.interviewerAnalyser ? new Uint8Array(this.interviewerAnalyser.frequencyBinCount) : null;
+    const canBuffer = this.candidateAnalyser ? new Uint8Array(this.candidateAnalyser.frequencyBinCount) : null;
 
     const updateLoop = () => {
-      if (!this.analyser) return;
-
-      this.analyser.getByteTimeDomainData(buffer);
-
-      // Compute RMS (Root Mean Square) volume level
-      let sum = 0;
-      for (let i = 0; i < buffer.length; i++) {
-        const val = (buffer[i] - 128) / 128;
-        sum += val * val;
-      }
-      const rms = Math.sqrt(sum / buffer.length);
-      // Scaled level with high-gain sensitivity
-      const level = Math.min(100, Math.round(rms * 450));
-      this.audioLevel = level;
-
       const now = Date.now();
-      // Lower speech threshold to 2.2 so even quiet speaking voices register active audio cleanly
-      const speechThreshold = 2.2;
 
-      if (level > speechThreshold) {
-        if (!this.isSpeechActive) {
-          this.isSpeechActive = true;
-          this.speechStartTime = now;
+      // 1. Evaluate Interviewer Audio Level
+      if (this.interviewerAnalyser && intBuffer) {
+        this.interviewerAnalyser.getByteTimeDomainData(intBuffer);
+        let sum = 0;
+        for (let i = 0; i < intBuffer.length; i++) {
+          const val = (intBuffer[i] - 128) / 128;
+          sum += val * val;
         }
-        this.lastSpeechTime = now;
-      } else {
-        if (this.isSpeechActive) {
-          // If silence has lasted longer than our threshold (2.8s) after active speech:
-          if (now - this.lastSpeechTime > this.silenceThresholdMs) {
-            this.isSpeechActive = false;
-            // Ensure minimum speech duration (400ms) to avoid false trigger on a click or noise
-            if (this.lastSpeechTime - this.speechStartTime > 400) {
-              console.log('⚡ [VAD] Sustained silence detected after speech.');
-              if (this.onSilenceDetectedCallback) {
-                this.onSilenceDetectedCallback();
-              }
+        const rms = Math.sqrt(sum / intBuffer.length);
+        this.interviewerAudioLevel = Math.min(100, Math.round(rms * 450));
+
+        const speechThreshold = 2.2;
+        if (this.interviewerAudioLevel > speechThreshold) {
+          if (!this.isInterviewerSpeaking) {
+            this.isInterviewerSpeaking = true;
+            this.interviewerSpeechStartTime = now;
+            this.startInterviewerRecording();
+          }
+          this.interviewerLastSpeechTime = now;
+        } else {
+          if (this.isInterviewerSpeaking) {
+            // Sustained silence threshold reached after interviewer speech
+            if (now - this.interviewerLastSpeechTime > this.interviewerSilenceThresholdMs) {
+              this.isInterviewerSpeaking = false;
+              this.stopInterviewerRecording();
             }
           }
         }
+      }
+
+      // 2. Evaluate Candidate Audio Level
+      if (this.candidateAnalyser && canBuffer) {
+        this.candidateAnalyser.getByteTimeDomainData(canBuffer);
+        let sum = 0;
+        for (let i = 0; i < canBuffer.length; i++) {
+          const val = (canBuffer[i] - 128) / 128;
+          sum += val * val;
+        }
+        const rms = Math.sqrt(sum / canBuffer.length);
+        this.candidateAudioLevel = Math.min(100, Math.round(rms * 450));
+        this.isCandidateSpeaking = this.candidateAudioLevel > 2.5;
       }
 
       this.animFrameId = requestAnimationFrame(updateLoop);
@@ -337,28 +421,100 @@ export class AudioEngineService {
     updateLoop();
   }
 
+  private startInterviewerRecording() {
+    if (this.interviewerRecorder && this.interviewerRecorder.state === 'inactive') {
+      try {
+        this.recordedChunks = [];
+        this.interviewerRecorder.start(250);
+        this.isRecordingInterviewer = true;
+
+        // Auto-slice after 7 seconds max continuous speech to avoid huge latency
+        if (this.segmentMaxTimer) clearTimeout(this.segmentMaxTimer);
+        this.segmentMaxTimer = setTimeout(() => {
+          if (this.isInterviewerSpeaking && this.interviewerRecorder && this.interviewerRecorder.state === 'recording') {
+            this.stopInterviewerRecording();
+          }
+        }, 7000);
+      } catch (e) {}
+    }
+  }
+
+  private stopInterviewerRecording() {
+    if (this.segmentMaxTimer) {
+      clearTimeout(this.segmentMaxTimer);
+      this.segmentMaxTimer = null;
+    }
+    if (this.interviewerRecorder && this.interviewerRecorder.state === 'recording') {
+      try {
+        this.interviewerRecorder.stop();
+        this.isRecordingInterviewer = false;
+      } catch (e) {}
+    }
+  }
+
+  // Sets mic gain sensitivity multiplier
+  public setSensitivityMultiplier(multiplier: number) {
+    this.micGainMultiplier = multiplier;
+    if (this.interviewerGain && this.interviewerAudioContext) {
+      this.interviewerGain.gain.setValueAtTime(this.micGainMultiplier, this.interviewerAudioContext.currentTime);
+    }
+  }
+
+  // Converts Audio Blob to Base64
+  public blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const res = reader.result as string;
+        const base64 = res.split(',')[1] || res;
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
   stopAudio() {
-    this.isSpeechActive = false;
-    this.audioLevel = 0;
+    this.isInterviewerSpeaking = false;
+    this.isCandidateSpeaking = false;
+    this.interviewerAudioLevel = 0;
+    this.candidateAudioLevel = 0;
+
+    if (this.segmentMaxTimer) {
+      clearTimeout(this.segmentMaxTimer);
+      this.segmentMaxTimer = null;
+    }
 
     if (this.animFrameId) {
       cancelAnimationFrame(this.animFrameId);
       this.animFrameId = null;
     }
 
-    if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach(t => t.stop());
-      this.mediaStream = null;
+    this.stopInterviewerRecording();
+
+    if (this.displayStream) {
+      this.displayStream.getTracks().forEach(t => t.stop());
+      this.displayStream = null;
     }
 
-    if (this.audioContext && this.audioContext.state !== 'closed') {
-      try {
-        this.audioContext.close();
-      } catch (e) {}
-      this.audioContext = null;
+    if (this.micStream) {
+      this.micStream.getTracks().forEach(t => t.stop());
+      this.micStream = null;
     }
-    this.analyser = null;
-    this.gainNode = null;
+
+    if (this.interviewerAudioContext && this.interviewerAudioContext.state !== 'closed') {
+      try { this.interviewerAudioContext.close(); } catch (e) {}
+      this.interviewerAudioContext = null;
+    }
+
+    if (this.candidateAudioContext && this.candidateAudioContext.state !== 'closed') {
+      try { this.candidateAudioContext.close(); } catch (e) {}
+      this.candidateAudioContext = null;
+    }
+
+    this.interviewerAnalyser = null;
+    this.candidateAnalyser = null;
+    this.interviewerGain = null;
   }
 
   // Technical term auto-correction utility applying phonetic dictionary

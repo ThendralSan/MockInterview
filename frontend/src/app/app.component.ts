@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, HostListener } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, HostListener, ViewChild, ElementRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
@@ -17,6 +17,14 @@ export interface HistoryItem {
     snippet: string;
   } | null;
   latencyMs?: number;
+}
+
+export interface ConversationMessage {
+  id: string;
+  speaker: 'INTERVIEWER' | 'CANDIDATE';
+  text: string;
+  timestamp: string | Date;
+  isQuestion?: boolean;
 }
 
 export interface CandidateProfile {
@@ -44,6 +52,10 @@ export interface Preferences {
 export class AppComponent implements OnInit, OnDestroy {
   title = 'Parakeet Copilot - Real-Time Technical Interview Assistant';
 
+  // Video and Chat Elements
+  @ViewChild('interviewerVideo') interviewerVideoRef?: ElementRef<HTMLVideoElement>;
+  @ViewChild('chatScrollContainer') chatScrollContainerRef?: ElementRef<HTMLDivElement>;
+
   // WebSocket state
   ws: WebSocket | null = null;
   isConnected: boolean = false;
@@ -53,6 +65,17 @@ export class AppComponent implements OnInit, OnDestroy {
   autoAnswerEnabled: boolean = true;
   speechStateMessage: string = '';
   micSensitivityLevel: 'NORMAL' | 'HIGH' | 'MAX' = 'HIGH';
+
+  // Dual Speaker Conversation Feed
+  conversationMessages: ConversationMessage[] = [];
+  conversationFilter: 'ALL' | 'INTERVIEWER' | 'CANDIDATE' = 'ALL';
+  isMeetingLive: boolean = false;
+  activeMeetingQuestion: string = '';
+
+  // Session Stopwatch
+  sessionSeconds: number = 0;
+  sessionTimerStr: string = '00:00';
+  sessionTimerInterval: any = null;
 
   // Question & streaming generation state
   question: string = '';
@@ -69,7 +92,7 @@ export class AppComponent implements OnInit, OnDestroy {
   recognition: any = null;
   speechTimeout: any = null;
   speechSupported: boolean = false;
-  audioSource: AudioInputSource = 'MICROPHONE';
+  audioSource: AudioInputSource = 'DUAL_AUDIO';
 
   // Text to Speech (Audio Headset) state
   isSpeaking: boolean = false;
@@ -80,12 +103,13 @@ export class AppComponent implements OnInit, OnDestroy {
 
   // Modals & settings
   showSettingsModal: boolean = false;
+  showHistoryDrawer: boolean = false;
   copiedFeedback: string = '';
 
   candidateProfile: CandidateProfile = {
     experienceYears: 7,
-    primarySkills: 'C#, ASP.NET Core, EF Core, React, Angular, TypeScript, SQL Server, Azure, Microservices, Redis, Kafka, RabbitMQ, Docker, Kubernetes',
-    secondarySkills: 'CI/CD, Event-Driven Architecture, Distributed Systems',
+    primarySkills: 'C#, ASP.NET, ASP.NET Core, ASP.NET MVC, Entity Framework Core, SQL Server, Microsoft Azure, React, Angular',
+    secondarySkills: 'TypeScript, Microservices, Docker, Kubernetes, Redis, Kafka, RabbitMQ, CI/CD',
     targetRole: 'Senior Full Stack Developer'
   };
 
@@ -104,7 +128,6 @@ export class AppComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit() {
-    // Restore persistent Auto-Answer preference from localStorage
     const savedAutoAnswer = localStorage.getItem('parakeet_auto_answer');
     if (savedAutoAnswer !== null) {
       this.autoAnswerEnabled = savedAutoAnswer === 'true';
@@ -116,21 +139,32 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() {
-    this.stopListening();
+    this.stopMeetingSession();
     this.stopSpeaking();
-    this.audioEngine.stopAudio();
     if (this.ws) this.ws.close();
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     if (this.speechTimeout) clearTimeout(this.speechTimeout);
+    if (this.sessionTimerInterval) clearInterval(this.sessionTimerInterval);
   }
 
-  // Hotkey listener: pressing Alt+Enter or Ctrl+Enter commits question immediately
+  // Hotkey listener: pressing Alt+Enter commits question immediately
   @HostListener('window:keydown', ['$event'])
   handleKeyboardEvent(event: KeyboardEvent) {
     if ((event.altKey && event.key === 'Enter') || (event.ctrlKey && event.key === 'Enter')) {
       event.preventDefault();
       this.askQuestion();
     }
+  }
+
+  // Filtered conversation messages
+  get filteredConversation(): ConversationMessage[] {
+    if (this.conversationFilter === 'INTERVIEWER') {
+      return this.conversationMessages.filter(m => m.speaker === 'INTERVIEWER');
+    }
+    if (this.conversationFilter === 'CANDIDATE') {
+      return this.conversationMessages.filter(m => m.speaker === 'CANDIDATE');
+    }
+    return this.conversationMessages;
   }
 
   // --- AUTO-ANSWER TOGGLE ---
@@ -141,13 +175,33 @@ export class AppComponent implements OnInit, OnDestroy {
     
     if (!this.autoAnswerEnabled) {
       if (this.speechTimeout) clearTimeout(this.speechTimeout);
-      this.speechStateMessage = 'Auto-Answer is OFF (Manual mode: click "Answer Now" when ready)';
-      this.showCopiedFeedback('Auto-Answer turned OFF: Questions will transcribe without auto-generating.');
+      this.speechStateMessage = 'Auto-Answer is OFF (Manual mode: click "⚡ Answer Now" when ready)';
+      this.showCopiedFeedback('Auto-Answer turned OFF.');
     } else {
-      this.speechStateMessage = 'Auto-Answer is ON (3s pause + complete sentence detection active)';
-      this.showCopiedFeedback('Auto-Answer turned ON: Will trigger only when interviewer finishes complete question.');
+      this.speechStateMessage = 'Auto-Answer is ON (Automatic response upon interviewer question)';
+      this.showCopiedFeedback('Auto-Answer turned ON.');
     }
     this.cdr.detectChanges();
+  }
+
+  // --- SESSION TIMER ---
+  startSessionTimer() {
+    this.stopSessionTimer();
+    this.sessionSeconds = 0;
+    this.sessionTimerInterval = setInterval(() => {
+      this.sessionSeconds++;
+      const mins = Math.floor(this.sessionSeconds / 60).toString().padStart(2, '0');
+      const secs = (this.sessionSeconds % 60).toString().padStart(2, '0');
+      this.sessionTimerStr = `${mins}:${secs}`;
+      this.cdr.detectChanges();
+    }, 1000);
+  }
+
+  stopSessionTimer() {
+    if (this.sessionTimerInterval) {
+      clearInterval(this.sessionTimerInterval);
+      this.sessionTimerInterval = null;
+    }
   }
 
   // --- WEBSOCKET CONNECTION & MESSAGING ---
@@ -199,6 +253,37 @@ export class AppComponent implements OnInit, OnDestroy {
             this.aiResponse = this.history[this.history.length - 1];
           }
         }
+        if (Array.isArray(payload.conversationLog)) {
+          this.conversationMessages = payload.conversationLog;
+          this.scrollConversationToBottom();
+        }
+        this.cdr.detectChanges();
+        break;
+      }
+
+      case 'SPEECH_TRANSCRIBED': {
+        const msg: ConversationMessage = payload.data;
+        if (msg && msg.text) {
+          // Avoid duplicate messages with same id
+          if (!this.conversationMessages.some(m => m.id === msg.id)) {
+            this.conversationMessages.push(msg);
+            this.scrollConversationToBottom();
+          }
+
+          if (msg.speaker === 'INTERVIEWER') {
+            this.activeMeetingQuestion = msg.text;
+            if (msg.isQuestion && !this.loading) {
+              this.question = msg.text;
+            }
+          }
+        }
+        this.cdr.detectChanges();
+        break;
+      }
+
+      case 'CONVERSATION_CLEARED': {
+        this.conversationMessages = [];
+        this.activeMeetingQuestion = '';
         this.cdr.detectChanges();
         break;
       }
@@ -247,7 +332,6 @@ export class AppComponent implements OnInit, OnDestroy {
         this.selectedHistoryId = item.id;
         this.lastGenerationLatency = item.latencyMs ? Math.round(item.latencyMs) : 1100;
 
-        // Auto-play audio if not already started
         if (this.preferences.audioSettings.autoTts && !this.hasSpokenFirstSentence && item.answer) {
           this.speakAnswer(item.answer);
         }
@@ -293,6 +377,15 @@ export class AppComponent implements OnInit, OnDestroy {
     }
   }
 
+  scrollConversationToBottom() {
+    setTimeout(() => {
+      if (this.chatScrollContainerRef && this.chatScrollContainerRef.nativeElement) {
+        const el = this.chatScrollContainerRef.nativeElement;
+        el.scrollTop = el.scrollHeight;
+      }
+    }, 50);
+  }
+
   // Whispers sentence 1 into headset
   private checkAndSpeakFirstSentence(partial: string) {
     const match = partial.match(/"answer"\s*:\s*"([^"]{20,}[.?!])/i);
@@ -305,8 +398,8 @@ export class AppComponent implements OnInit, OnDestroy {
 
   // --- ACTIONS ---
 
-  askQuestion() {
-    let q = (this.question || '').trim();
+  askQuestion(customText?: string) {
+    let q = (customText !== undefined ? customText : this.question).trim();
     if (!q) return;
 
     if (this.speechTimeout) clearTimeout(this.speechTimeout);
@@ -323,9 +416,26 @@ export class AppComponent implements OnInit, OnDestroy {
       question: q
     }));
 
-    this.question = '';
+    if (customText === undefined) {
+      this.question = '';
+    }
     this.interimTranscript = '';
     this.cdr.detectChanges();
+  }
+
+  triggerAnswerForMessage(msg: ConversationMessage) {
+    this.question = msg.text;
+    this.askQuestion(msg.text);
+  }
+
+  clearConversation() {
+    if (confirm('Clear the conversation messages?')) {
+      this.conversationMessages = [];
+      this.activeMeetingQuestion = '';
+      if (this.ws && this.isConnected) {
+        this.ws.send(JSON.stringify({ type: 'CLEAR_CONVERSATION' }));
+      }
+    }
   }
 
   selectHistoryItem(item: HistoryItem) {
@@ -334,7 +444,7 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   clearHistory() {
-    if (confirm('Clear all interview question history for this session?')) {
+    if (confirm('Clear all generated interview question answers?')) {
       if (this.ws && this.isConnected) {
         this.ws.send(JSON.stringify({ type: 'CLEAR_HISTORY' }));
       }
@@ -342,27 +452,163 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   emergencyStop() {
-    this.stopListening();
+    this.stopMeetingSession();
     this.stopSpeaking();
     this.loading = false;
     this.streamingAnswerText = '';
     this.interimTranscript = '';
     this.speechStateMessage = '';
     if (this.speechTimeout) clearTimeout(this.speechTimeout);
-    this.showCopiedFeedback('Halted microphone and audio playback.');
+    this.showCopiedFeedback('Halted all audio capture and speech synthesis.');
   }
 
-  // --- AUDIO INPUT & INTELLIGENT QUESTION DETECTION ---
+  // --- DUAL AUDIO SEPARATION PIPELINE ---
 
-  async switchAudioSource(source: AudioInputSource) {
-    this.audioSource = source;
-    if (this.isListening) {
-      this.stopListening();
-      await this.startListening();
+  async startDualMeetingSession() {
+    this.speechStateMessage = 'Requesting tab/screen share with meeting audio...';
+
+    const result = await this.audioEngine.startDualAudioCapture(
+      // onInterviewerSpeechReady: Interviewer audio segment recorded from tab
+      async (blob: Blob) => {
+        if (!this.ws || !this.isConnected) return;
+        try {
+          const base64Audio = await this.audioEngine.blobToBase64(blob);
+          this.ws.send(JSON.stringify({
+            type: 'TRANSCRIBE_AUDIO',
+            audio: base64Audio,
+            mimeType: blob.type || 'audio/webm',
+            speaker: 'INTERVIEWER',
+            autoAnswer: this.autoAnswerEnabled
+          }));
+        } catch (err) {
+          console.error('[App] Failed to encode interviewer audio:', err);
+        }
+      },
+      // onTabEnded: User clicked Chrome's Stop sharing
+      () => {
+        this.stopMeetingSession();
+        this.showCopiedFeedback('Meeting tab share stopped.');
+      }
+    );
+
+    if (!result.success) {
+      this.speechStateMessage = result.error || 'Capture failed.';
+      alert(result.error || 'Failed to capture audio.');
+      this.cdr.detectChanges();
+      return;
+    }
+
+    this.isMeetingLive = true;
+    this.isListening = true;
+
+    // Attach video track to preview element (Parakeet AI visual style)
+    setTimeout(() => {
+      if (this.interviewerVideoRef && result.displayStream) {
+        this.interviewerVideoRef.nativeElement.srcObject = result.displayStream;
+      }
+    }, 150);
+
+    // Start local candidate microphone recognition
+    this.startCandidateMic();
+
+    // Start session timer
+    this.startSessionTimer();
+
+    this.speechStateMessage = 'Dual Audio Separation Active (Interviewer on Left, Candidate on Right)';
+    this.showCopiedFeedback('Dual Audio Active! Interviewer & candidate separated.');
+    this.cdr.detectChanges();
+  }
+
+  stopMeetingSession() {
+    this.isMeetingLive = false;
+    this.isListening = false;
+    this.audioEngine.stopAudio();
+    this.stopCandidateMic();
+    this.stopSessionTimer();
+
+    if (this.interviewerVideoRef && this.interviewerVideoRef.nativeElement) {
+      this.interviewerVideoRef.nativeElement.srcObject = null;
+    }
+
+    this.speechStateMessage = 'Capture stopped.';
+    this.cdr.detectChanges();
+  }
+
+  // --- CANDIDATE MICROPHONE RECOGNITION (NEVER AUTO-TRIGGERS ANSWER) ---
+
+  setupSpeechRecognition() {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      this.speechSupported = true;
+      this.recognition = new SpeechRecognition();
+      this.recognition.continuous = true;
+      this.recognition.interimResults = true;
+      this.recognition.maxAlternatives = 3;
+      this.recognition.lang = 'en-US';
+
+      this.recognition.onstart = () => {
+        this.cdr.detectChanges();
+      };
+
+      this.recognition.onresult = (event: any) => {
+        let bestFinalChunk = '';
+        let bestInterimChunk = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const res = event.results[i];
+          if (res.isFinal) {
+            bestFinalChunk += ' ' + res[0].transcript;
+          } else {
+            bestInterimChunk += ' ' + res[0].transcript;
+          }
+        }
+
+        // When candidate speaks into microphone:
+        // We log it as CANDIDATE speech (displayed on the RIGHT side).
+        // CRITICAL: We NEVER trigger answer generation on candidate speech!
+        if (bestFinalChunk.trim()) {
+          const correctedFinal = this.audioEngine.correctTechnicalTerms(bestFinalChunk.trim());
+          if (this.ws && this.isConnected) {
+            this.ws.send(JSON.stringify({
+              type: 'LOG_CANDIDATE_SPEECH',
+              text: correctedFinal
+            }));
+          }
+          this.interimTranscript = '';
+        } else if (bestInterimChunk.trim()) {
+          this.interimTranscript = bestInterimChunk.trim();
+        }
+        this.cdr.detectChanges();
+      };
+
+      this.recognition.onerror = (event: any) => {
+        console.warn('Candidate Speech Recognition notice:', event.error);
+        this.cdr.detectChanges();
+      };
+
+      this.recognition.onend = () => {
+        // Auto-restart recognition while meeting is live
+        if (this.isMeetingLive) {
+          try { this.recognition.start(); } catch (e) {}
+        }
+      };
     }
   }
 
-  // --- AUDIO SENSITIVITY CONTROL ---
+  startCandidateMic() {
+    if (!this.recognition) return;
+    try {
+      this.recognition.start();
+    } catch (e) {}
+  }
+
+  stopCandidateMic() {
+    if (!this.recognition) return;
+    try {
+      this.recognition.stop();
+    } catch (e) {}
+  }
+
   cycleMicSensitivity() {
     if (this.micSensitivityLevel === 'NORMAL') {
       this.micSensitivityLevel = 'HIGH';
@@ -377,203 +623,6 @@ export class AppComponent implements OnInit, OnDestroy {
       this.audioEngine.setSensitivityMultiplier(1.0);
       this.showCopiedFeedback('Mic Sensitivity: Standard (1.0x Normal)');
     }
-    this.cdr.detectChanges();
-  }
-
-  setupSpeechRecognition() {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      this.speechSupported = true;
-      this.recognition = new SpeechRecognition();
-      this.recognition.continuous = true;
-      this.recognition.interimResults = true;
-      this.recognition.maxAlternatives = 5;
-      this.recognition.lang = 'en-US';
-
-      // Acoustic biasing using SpeechGrammarList if supported by browser engine
-      const SpeechGrammarList = (window as any).SpeechGrammarList || (window as any).webkitSpeechGrammarList;
-      if (SpeechGrammarList) {
-        try {
-          const grammarList = new SpeechGrammarList();
-          const techGrammar = `#JSGF V1.0; grammar tech; public <tech> = CORS | CORS policy | CSRF | XSS | DOM | Virtual DOM | Shadow DOM | API | REST API | Web API | OpenAPI | async and await | async | await | Task | ConfigureAwait | Task.WhenAll | ValueTask | Dependency Injection | IoC | DbContext | EF Core | Entity Framework | C# | .NET | ASP.NET Core | SQL Server | LINQ | CLR | Garbage Collection | IDisposable | Angular | React | RxJS | NgRx | TypeScript | Webpack | microservices | Kubernetes | Docker | Kafka | Redis | RabbitMQ | CQRS | gRPC | SignalR | Azure | CI/CD | SOLID principles | JWT | OAuth | Polly | Dapper | MediatR ;`;
-          grammarList.addFromString(techGrammar, 1.0);
-          this.recognition.grammars = grammarList;
-        } catch (grammarErr) {
-          console.warn('[SpeechRecognition] Grammar list not supported:', grammarErr);
-        }
-      }
-
-      this.recognition.onstart = () => {
-        this.isListening = true;
-        this.speechStateMessage = this.autoAnswerEnabled 
-          ? 'Listening... (Intelligent question detection active)' 
-          : 'Listening... (Auto-Answer OFF - Manual mode)';
-        this.cdr.detectChanges();
-      };
-
-      this.recognition.onresult = (event: any) => {
-        let bestFinalChunk = '';
-        let bestInterimChunk = '';
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          const res = event.results[i];
-          if (res.isFinal) {
-            // Check all alternatives and choose the one with the highest technical relevance
-            let candidateText = res[0].transcript;
-            let highestScore = this.audioEngine.scoreTechnicalRelevance(this.audioEngine.correctTechnicalTerms(candidateText));
-
-            for (let j = 1; j < res.length; j++) {
-              const altTranscript = res[j].transcript;
-              const altScore = this.audioEngine.scoreTechnicalRelevance(this.audioEngine.correctTechnicalTerms(altTranscript));
-              if (altScore > highestScore) {
-                highestScore = altScore;
-                candidateText = altTranscript;
-              }
-            }
-            bestFinalChunk += ' ' + candidateText;
-          } else {
-            // For interim results, also check alternatives if available
-            let candidateText = res[0].transcript;
-            let highestScore = this.audioEngine.scoreTechnicalRelevance(this.audioEngine.correctTechnicalTerms(candidateText));
-
-            for (let j = 1; j < res.length; j++) {
-              const altTranscript = res[j].transcript;
-              const altScore = this.audioEngine.scoreTechnicalRelevance(this.audioEngine.correctTechnicalTerms(altTranscript));
-              if (altScore > highestScore) {
-                highestScore = altScore;
-                candidateText = altTranscript;
-              }
-            }
-            bestInterimChunk += ' ' + candidateText;
-          }
-        }
-
-        if (bestFinalChunk.trim()) {
-          const correctedFinal = this.audioEngine.correctTechnicalTerms(bestFinalChunk.trim());
-          this.question += (this.question ? ' ' : '') + correctedFinal;
-          this.interimTranscript = '';
-          this.evaluateQuestionCompletionAndSchedule();
-        } else if (bestInterimChunk.trim()) {
-          this.interimTranscript = this.audioEngine.correctTechnicalTerms(bestInterimChunk.trim());
-          // Speaker is actively talking: cancel any pending silence timers immediately!
-          if (this.speechTimeout) {
-            clearTimeout(this.speechTimeout);
-            this.speechTimeout = null;
-          }
-          this.speechStateMessage = 'Interviewer speaking...';
-        }
-        this.cdr.detectChanges();
-      };
-
-      this.recognition.onerror = (event: any) => {
-        console.warn('Speech Recognition event:', event.error);
-        if (event.error === 'not-allowed') this.isListening = false;
-        this.cdr.detectChanges();
-      };
-
-      this.recognition.onend = () => {
-        if (this.isListening) {
-          try { this.recognition.start(); } catch (e) { this.isListening = false; }
-        }
-        this.cdr.detectChanges();
-      };
-    }
-  }
-
-  /**
-   * Evaluates if question is complete and handles timing:
-   * - If Auto-Answer is OFF: Never auto-triggers.
-   * - If Incomplete (e.g. interviewer pausing on "What is..."): Does not trigger on 2-3s pause; waits for speaker to finish.
-   * - If Complete (including short technical questions like "What is DOM?"): Schedules answer generation after 2.2s silence.
-   */
-  private evaluateQuestionCompletionAndSchedule() {
-    if (!this.autoAnswerEnabled) {
-      this.speechStateMessage = 'Transcribing... (Auto-Answer is OFF - Click Answer Now when ready)';
-      if (this.speechTimeout) clearTimeout(this.speechTimeout);
-      return;
-    }
-
-    const currentText = this.question.trim();
-    if (!currentText || this.loading) return;
-
-    const analysis = this.audioEngine.isCompleteQuestion(currentText);
-
-    if (this.speechTimeout) clearTimeout(this.speechTimeout);
-
-    if (analysis.isComplete) {
-      this.speechStateMessage = `Question detected: "${analysis.reason}". Auto-generating in 2.2s (or click Answer Now)...`;
-      // Wait 2.2 seconds of sustained silence after a complete question to allow natural wrap-up
-      this.speechTimeout = setTimeout(() => {
-        if (this.autoAnswerEnabled && this.question.trim().length >= 3 && !this.loading) {
-          console.log(`⚡ [Auto-Answer] Complete question verified (${analysis.reason}). Generating!`);
-          this.askQuestion();
-        }
-      }, 2200);
-    } else {
-      // Sentence is incomplete (e.g. trailing "and...", "what is...", "what is the difference between...")
-      // DO NOT trigger on 2-3s pause!
-      this.speechStateMessage = `Interviewer paused... (${analysis.reason} - waiting for completion)`;
-      console.log(`[Auto-Answer] Incomplete thought detected (${analysis.reason}). Holding trigger.`);
-      
-      // Safety fallback: wait up to 5.5s in case speaker walked away
-      this.speechTimeout = setTimeout(() => {
-        if (this.autoAnswerEnabled && this.question.trim().length >= 5 && !this.loading) {
-          console.log('⚡ [Auto-Answer] Extended timeout reached on substantive text. Triggering fallback answer.');
-          this.askQuestion();
-        }
-      }, 5500);
-    }
-  }
-
-  async toggleListening() {
-    if (!this.speechSupported) return;
-    if (this.isListening) {
-      this.stopListening();
-    } else {
-      await this.startListening();
-    }
-  }
-
-  async startListening() {
-    if (!this.recognition) return;
-
-    // VAD silence callback (2800ms threshold)
-    const onVADSilence = () => {
-      if (this.autoAnswerEnabled && this.question.trim().length >= 3 && !this.loading) {
-        const analysis = this.audioEngine.isCompleteQuestion(this.question);
-        if (analysis.isComplete) {
-          console.log(`⚡ [VAD Trigger] Sustained silence + complete question verified: "${this.question}"`);
-          this.askQuestion();
-        } else {
-          console.log(`[VAD] Silence detected, but sentence incomplete (${analysis.reason}). Waiting.`);
-        }
-      }
-    };
-
-    if (this.audioSource === 'SYSTEM_AUDIO') {
-      const ok = await this.audioEngine.startSystemAudio(onVADSilence);
-      if (!ok) return;
-    } else {
-      await this.audioEngine.startMicrophone(onVADSilence);
-    }
-
-    try {
-      this.isListening = true;
-      this.recognition.start();
-    } catch (e) {
-      console.warn('Recognition start exception:', e);
-    }
-    this.cdr.detectChanges();
-  }
-
-  stopListening() {
-    this.isListening = false;
-    this.audioEngine.stopAudio();
-    this.speechStateMessage = '';
-    if (this.recognition) {
-      try { this.recognition.stop(); } catch (e) {}
-    }
-    if (this.speechTimeout) clearTimeout(this.speechTimeout);
     this.cdr.detectChanges();
   }
 

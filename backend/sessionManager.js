@@ -30,7 +30,8 @@ class SessionManager {
             updatedAt: new Date().toISOString(),
             candidateProfile: { ...DEFAULT_PROFILE },
             preferences: { ...DEFAULT_PREFERENCES },
-            history: []
+            history: [],
+            conversationLog: []
         };
         this.loadSession();
     }
@@ -45,9 +46,10 @@ class SessionManager {
                     ...parsed,
                     candidateProfile: { ...DEFAULT_PROFILE, ...(parsed.candidateProfile || {}) },
                     preferences: { ...DEFAULT_PREFERENCES, ...(parsed.preferences || {}) },
-                    history: Array.isArray(parsed.history) ? parsed.history : []
+                    history: Array.isArray(parsed.history) ? parsed.history : [],
+                    conversationLog: Array.isArray(parsed.conversationLog) ? parsed.conversationLog : []
                 };
-                console.log(`[SessionManager] Loaded session from storage with ${this.sessionData.history.length} history items.`);
+                console.log(`[SessionManager] Loaded session: ${this.sessionData.history.length} answers, ${this.sessionData.conversationLog.length} conversation messages.`);
             } else {
                 this.saveSession();
             }
@@ -133,6 +135,36 @@ class SessionManager {
         return this.sessionData;
     }
 
+    addConversationMessage({ speaker = 'INTERVIEWER', text = '', isQuestion = false }) {
+        if (!text || !text.trim()) return null;
+        if (!Array.isArray(this.sessionData.conversationLog)) {
+            this.sessionData.conversationLog = [];
+        }
+        const msg = {
+            id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+            timestamp: new Date().toISOString(),
+            speaker: speaker.toUpperCase() === 'CANDIDATE' ? 'CANDIDATE' : 'INTERVIEWER',
+            text: text.trim(),
+            isQuestion: !!isQuestion
+        };
+        this.sessionData.conversationLog.push(msg);
+        if (this.sessionData.conversationLog.length > 150) {
+            this.sessionData.conversationLog.shift();
+        }
+        this.saveSession();
+        return msg;
+    }
+
+    getConversationLog() {
+        return this.sessionData.conversationLog || [];
+    }
+
+    clearConversationLog() {
+        this.sessionData.conversationLog = [];
+        this.saveSession();
+        return this.sessionData;
+    }
+
     resetSession() {
         this.sessionData = {
             sessionId: 'session_' + Date.now(),
@@ -140,7 +172,8 @@ class SessionManager {
             updatedAt: new Date().toISOString(),
             candidateProfile: { ...DEFAULT_PROFILE },
             preferences: { ...DEFAULT_PREFERENCES },
-            history: []
+            history: [],
+            conversationLog: []
         };
         this.saveSession();
         return this.sessionData;

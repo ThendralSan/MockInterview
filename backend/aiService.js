@@ -609,7 +609,99 @@ function generateHandsOnFallback(question) {
     };
 }
 
+/**
+ * Fast speech-to-text transcriber for interviewer meeting audio chunks.
+ * Handles audio/webm, audio/wav, audio/ogg from browser MediaRecorder.
+ */
+async function transcribeAudio(base64Audio, mimeType = 'audio/webm') {
+    if (!base64Audio) return '';
+
+    const payload = {
+        system_instruction: {
+            parts: [{
+                text: "You are a fast, high-accuracy speech-to-text transcriber for software engineering technical interviews. Transcribe the spoken speech verbatim in English. Ensure correct technical capitalization and terminology for developer frameworks and languages (e.g., C#, .NET, ASP.NET Core, ASP.NET MVC, React, Angular, TypeScript, SQL Server, Azure, OOP, Entity Framework Core, AsNoTracking, RxJS, Signals, etc.). If the audio contains no clear human speech, background noise only, or music, reply with exactly 'NO_SPEECH'."
+            }]
+        },
+        contents: [{
+            role: "user",
+            parts: [
+                {
+                    inlineData: {
+                        mimeType: mimeType || 'audio/webm',
+                        data: base64Audio
+                    }
+                },
+                {
+                    text: "Transcribe the spoken audio verbatim."
+                }
+            ]
+        }],
+        generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 250
+        }
+    };
+
+    for (const model of FAST_MODELS) {
+        try {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 4500);
+
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal: controller.signal
+            });
+            clearTimeout(timeout);
+
+            if (!res.ok) continue;
+
+            const data = await res.json();
+            const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            const cleaned = text.trim();
+            if (!cleaned || cleaned.toUpperCase().includes('NO_SPEECH')) {
+                return '';
+            }
+            return normalizeQuestionText(cleaned);
+        } catch (err) {
+            console.warn(`[AIService] Audio transcribe with ${model} error:`, err.message);
+        }
+    }
+    return '';
+}
+
+/**
+ * Checks if the interviewer's transcript represents a technical question or prompt requiring an answer.
+ */
+function isInterviewerQuestion(text) {
+    if (!text || !text.trim()) return false;
+    const clean = text.trim();
+    if (clean.includes('?')) return true;
+
+    const lower = clean.toLowerCase();
+    const questionStarters = /^(what|how|why|when|where|which|who|can you|could you|would you|have you|tell me|explain|describe|walk me through|differentiate|define|talk about|what about)/i;
+    if (questionStarters.test(lower)) return true;
+
+    // Direct topic prompts: e.g. "Controlled and uncontrolled components", "SOLID principles", "AsNoTracking"
+    const techMarkers = [
+        'react', 'angular', 'c#', 'csharp', 'asp.net', 'mvc', 'sql', 'azure', 'oop', 'linq',
+        'component', 'hooks', 'virtual dom', 'fiber', 'dependency injection', 'ioc',
+        'middleware', 'entity framework', 'ef core', 'index', 'stored procedure', 'deadlock',
+        'blob storage', 'service bus', 'key vault', 'solid', 'docker', 'kubernetes', 'microservices'
+    ];
+    for (const marker of techMarkers) {
+        if (lower.includes(marker) && clean.split(/\s+/).length >= 2) {
+            return true;
+        }
+    }
+    return false;
+}
+
 module.exports = {
     streamInterviewAnswer,
-    normalizeQuestionText
+    normalizeQuestionText,
+    transcribeAudio,
+    isInterviewerQuestion
 };

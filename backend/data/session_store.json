@@ -1,7 +1,7 @@
 {
   "sessionId": "default-session",
   "createdAt": "2026-11-14T02:50:43.246Z",
-  "updatedAt": "2026-11-14T08:33:05.483Z",
+  "updatedAt": "2026-11-15T02:23:02.382Z",
   "candidateProfile": {
     "experienceYears": 7,
     "primarySkills": "C#, ASP.NET, ASP.NET Core, ASP.NET MVC, Entity Framework Core, SQL Server, Microsoft Azure, React, Angular",
@@ -21,74 +21,80 @@
   },
   "history": [
     {
-      "id": "q_1794645045922_ffxgu",
-      "timestamp": "2026-11-14T08:30:45.923Z",
-      "question": "whats oops?",
-      "category": "CSHARP",
-      "answer": "Object-Oriented Programming in C# is a paradigm built on four core pillars: encapsulation, abstraction, inheritance, and polymorphism, which we use to structure enterprise codebases around real-world business domains. In our production applications, we rely heavily on interfaces for abstraction and dependency injection to decouple services, making our systems highly maintainable and testable. Polymorphism allows us to write extensible business logic where services can process different implementations interchangeably through base interfaces without knowing their concrete types.",
-      "spokenAnswer": "Object-Oriented Programming in C# is a paradigm built on four core pillars: encapsulation, abstraction, inheritance, and polymorphism, which we use to structure enterprise codebases around real-world business domains. In our production applications, we rely heavily on interfaces for abstraction and dependency injection to decouple services, making our systems highly maintainable and testable. Polymorphism allows us to write extensible business logic where services can process different implementations interchangeably through base interfaces without knowing their concrete types.",
+      "id": "q_1794707145904_movgc",
+      "timestamp": "2026-11-15T01:45:45.904Z",
+      "question": "What is Angular",
+      "category": "ANGULAR",
+      "answer": "Angular is a robust, component-based TypeScript framework used for building scalable enterprise single-page applications. In our production architecture, we leverage standalone components for modularity, RxJS Observables for handling asynchronous data streams, and Signals for fine-grained reactivity. Dependency injection is built into its core, allowing us to manage services and maintain clean separation of concerns across large development teams.",
+      "spokenAnswer": "Angular is a robust, component-based TypeScript framework used for building scalable enterprise single-page applications. In our production architecture, we leverage standalone components for modularity, RxJS Observables for handling asynchronous data streams, and Signals for fine-grained reactivity. Dependency injection is built into its core, allowing us to manage services and maintain clean separation of concerns across large development teams.",
       "bulletPoints": [
-        "Four pillars: encapsulation, abstraction, inheritance, polymorphism",
-        "Extensive use of interfaces for loose coupling and DI",
-        "Domain-driven modeling for enterprise architectures"
+        "Standalone components for modular architecture",
+        "RxJS Observables and Signals for reactive state management",
+        "Hierarchical Dependency Injection for service management"
       ],
       "code": null,
-      "latencyMs": 2082,
-      "firstTokenMs": 1527
+      "latencyMs": 1811,
+      "firstTokenMs": 1474
     },
     {
-      "id": "q_1794645057657_l54ae",
-      "timestamp": "2026-11-14T08:30:57.657Z",
-      "question": "What is obstruction",
-      "category": "CSHARP",
-      "answer": "Abstraction in C# is the principle of hiding complex implementation details and exposing only the essential features of an object through abstract classes and interfaces. In our enterprise applications, we heavily rely on interfaces to define contracts for our services, which allows us to decouple our business logic from underlying data access or third-party integrations. This not only makes our codebase much easier to maintain and test, but it also enforces a clear boundary between components, enabling seamless dependency injection across our application architecture.",
-      "spokenAnswer": "Abstraction in C# is the principle of hiding complex implementation details and exposing only the essential features of an object through abstract classes and interfaces. In our enterprise applications, we heavily rely on interfaces to define contracts for our services, which allows us to decouple our business logic from underlying data access or third-party integrations. This not only makes our codebase much easier to maintain and test, but it also enforces a clear boundary between components, enabling seamless dependency injection across our application architecture.",
+      "id": "q_1794707176549_0c4dy",
+      "timestamp": "2026-11-15T01:46:16.549Z",
+      "question": "What is polymergasm",
+      "category": "GENERAL",
+      "answer": "That term is not a recognized concept or feature within software engineering or any of our enterprise technology stacks. If you meant polymorphism, that is a core object-oriented programming principle allowing objects of different types to be treated through the same interface.",
+      "spokenAnswer": "That term is not a recognized concept or feature within software engineering or any of our enterprise technology stacks. If you meant polymorphism, that is a core object-oriented programming principle allowing objects of different types to be treated through the same interface.",
       "bulletPoints": [
-        "Hides complex implementation details behind clean contracts",
-        "Implemented primarily using abstract classes and interfaces in C#",
-        "Enables loose coupling and robust dependency injection in enterprise systems"
-      ],
-      "code": {
-        "language": "csharp",
-        "snippet": "public interface IPaymentService\n{\n    Task<bool> ProcessPaymentAsync(decimal amount, string currency);\n}\n\npublic class StripePaymentService : IPaymentService\n{\n    public async Task<bool> ProcessPaymentAsync(decimal amount, string currency)\n    {\n        // Hidden complex API integration details\n        return await Task.FromResult(true);\n    }\n}"
-      },
-      "latencyMs": 1604,
-      "firstTokenMs": 889
-    },
-    {
-      "id": "q_1794645174716_zb9m1",
-      "timestamp": "2026-11-14T08:32:54.716Z",
-      "question": "What is the difference between polymorphism",
-      "category": "CSHARP",
-      "answer": "In C#, polymorphism allows objects of different derived classes to be treated through a common base class interface. We primarily implement this using compile-time overloading and run-time overriding with virtual and override keywords. In our enterprise applications, this enables us to write extensible service layers where a single caller can execute distinct business logic behaviors seamlessly based on the instantiated runtime type.",
-      "spokenAnswer": "In C#, polymorphism allows objects of different derived classes to be treated through a common base class interface. We primarily implement this using compile-time overloading and run-time overriding with virtual and override keywords. In our enterprise applications, this enables us to write extensible service layers where a single caller can execute distinct business logic behaviors seamlessly based on the instantiated runtime type.",
-      "bulletPoints": [
-        "Compile-time (method overloading) vs Run-time (method overriding)",
-        "Enables flexible and extensible enterprise service architectures",
-        "Utilizes virtual, override, and abstract keywords in class hierarchies"
-      ],
-      "code": {
-        "language": "csharp",
-        "snippet": "public abstract class NotificationService {\n    public abstract void Send(string message);\n}\n\npublic class EmailNotificationService : NotificationService {\n    public override void Send(string message) => Console.WriteLine($\"Email: {message}\");\n}"
-      },
-      "latencyMs": 1589,
-      "firstTokenMs": 950
-    },
-    {
-      "id": "q_1794645185483_0yty7",
-      "timestamp": "2026-11-14T08:33:05.483Z",
-      "question": "What is SOLID principles",
-      "category": "CSHARP",
-      "answer": "In our enterprise C# codebases, we strictly adhere to the SOLID principles to maintain high modularity, testability, and maintainability. Single Responsibility ensures each class handles one distinct domain concern, while Open/Closed allows us to extend functionality via interfaces without modifying tested code. Liskov Substitution guarantees that derived classes like specific repository implementations can seamlessly replace their base abstractions. Interface Segregation keeps our contracts lean by preventing fat interfaces, and Dependency Inversion relies heavily on constructor injection through our native IoC container to decouple high-level services from low-level infrastructure.",
-      "spokenAnswer": "In our enterprise C# codebases, we strictly adhere to the SOLID principles to maintain high modularity, testability, and maintainability. Single Responsibility ensures each class handles one distinct domain concern, while Open/Closed allows us to extend functionality via interfaces without modifying tested code. Liskov Substitution guarantees that derived classes like specific repository implementations can seamlessly replace their base abstractions. Interface Segregation keeps our contracts lean by preventing fat interfaces, and Dependency Inversion relies heavily on constructor injection through our native IoC container to decouple high-level services from low-level infrastructure.",
-      "bulletPoints": [
-        "Single Responsibility: One clear domain reason for a class to change",
-        "Open/Closed: Extend behavior using interfaces without modifying existing code",
-        "Dependency Inversion: Inject abstractions via constructor for loose coupling"
+        "Clarify misunderstanding of non-technical term",
+        "Pivot to recognized technical concepts if intended",
+        "Maintain professional and authoritative demeanor"
       ],
       "code": null,
-      "latencyMs": 1802,
-      "firstTokenMs": 1190
+      "latencyMs": 1249,
+      "firstTokenMs": 875
+    },
+    {
+      "id": "q_1794707199664_n9y4n",
+      "timestamp": "2026-11-15T01:46:39.664Z",
+      "question": "What is a SOLID principles",
+      "category": "CSHARP",
+      "answer": "In our enterprise C# codebases, we strictly adhere to the SOLID principles to maintain high cohesion and low coupling across our object-oriented domain models and services. For instance, the Single Responsibility Principle ensures our classes have only one reason to change, while Dependency Inversion allows us to cleanly inject abstractions via constructors for testability. This design discipline prevents architectural degradation as our codebase scales across multiple engineering teams.",
+      "spokenAnswer": "In our enterprise C# codebases, we strictly adhere to the SOLID principles to maintain high cohesion and low coupling across our object-oriented domain models and services. For instance, the Single Responsibility Principle ensures our classes have only one reason to change, while Dependency Inversion allows us to cleanly inject abstractions via constructors for testability. This design discipline prevents architectural degradation as our codebase scales across multiple engineering teams.",
+      "bulletPoints": [
+        "Single Responsibility ensures classes have one clear domain duty",
+        "Open/Closed principle allows extension without modifying existing code",
+        "Dependency Inversion decouples components via constructor-injected interfaces"
+      ],
+      "code": null,
+      "latencyMs": 1797,
+      "firstTokenMs": 1311
+    },
+    {
+      "id": "q_1794709382382_haus5",
+      "timestamp": "2026-11-15T02:23:02.382Z",
+      "question": "What are controlled and uncontrolled components in React?",
+      "category": "REACT",
+      "answer": "In our React production applications, controlled components are form elements where state is fully managed by React components through useState, making React the single source of truth for the input's value. Uncontrolled components, on the other hand, manage their own state internally using standard DOM elements accessed via useRef, which we typically only use for low-level file inputs or direct integrations with legacy third-party libraries. We heavily favor controlled components for standard forms because they allow us to implement real-time validation, dynamic input formatting, and conditional button states seamlessly on every keystroke.",
+      "spokenAnswer": "In our React production applications, controlled components are form elements where state is fully managed by React components through useState, making React the single source of truth for the input's value. Uncontrolled components, on the other hand, manage their own state internally using standard DOM elements accessed via useRef, which we typically only use for low-level file inputs or direct integrations with legacy third-party libraries. We heavily favor controlled components for standard forms because they allow us to implement real-time validation, dynamic input formatting, and conditional button states seamlessly on every keystroke.",
+      "bulletPoints": [
+        "Controlled components rely on React state as the single source of truth.",
+        "Uncontrolled components store their own state in the DOM using refs.",
+        "Controlled components are preferred for real-time validation and conditional UI."
+      ],
+      "code": {
+        "language": "typescript",
+        "snippet": "// Controlled Component Example\nfunction ControlledInput() {\n  const [value, setValue] = useState('');\n  return <input value={value} onChange={(e) => setValue(e.target.value)} />;\n}"
+      },
+      "latencyMs": 2047,
+      "firstTokenMs": 1245
+    }
+  ],
+  "conversationLog": [
+    {
+      "id": "msg_1794709378821_o25i",
+      "timestamp": "2026-11-15T02:22:58.821Z",
+      "speaker": "CANDIDATE",
+      "text": "Now. Tell me, what is your name?",
+      "isQuestion": false
     }
   ]
 }

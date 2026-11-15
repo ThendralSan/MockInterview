@@ -175,16 +175,18 @@ wss.on('connection', (ws) => {
                             isQuestion
                         });
 
-                        broadcast({
-                            type: 'SPEECH_TRANSCRIBED',
-                            data: msg
-                        });
+                        if (msg) {
+                            broadcast({
+                                type: 'SPEECH_TRANSCRIBED',
+                                data: msg
+                            });
 
-                        // ONLY generate an answer if the INTERVIEWER asked a question and autoAnswer is ON!
-                        // NEVER auto-trigger on candidate speech!
-                        if (speaker === 'INTERVIEWER' && autoAnswer && isQuestion) {
-                            console.log(`⚡ [Auto-Answer Triggered by Interviewer Question]: "${transcript}"`);
-                            await handleStreamingAnswer(transcript, ws);
+                            // ONLY generate an answer if the INTERVIEWER asked a question and autoAnswer is ON!
+                            // NEVER auto-trigger on candidate speech!
+                            if (speaker === 'INTERVIEWER' && autoAnswer && isQuestion) {
+                                console.log(`⚡ [Auto-Answer Triggered by Interviewer Question]: "${transcript}"`);
+                                await handleStreamingAnswer(transcript, ws);
+                            }
                         }
                     }
                     break;
@@ -200,11 +202,13 @@ wss.on('connection', (ws) => {
                         isQuestion: false
                     });
 
-                    broadcast({
-                        type: 'SPEECH_TRANSCRIBED',
-                        data: msg
-                    });
-                    console.log(`🗣️ [Candidate Voice]: "${text}" (Zero AI generation triggered)`);
+                    if (msg) {
+                        broadcast({
+                            type: 'SPEECH_TRANSCRIBED',
+                            data: msg
+                        });
+                        console.log(`🗣️ [Candidate Voice]: "${text}" (Zero AI generation triggered)`);
+                    }
                     break;
                 }
 

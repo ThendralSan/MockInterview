@@ -188,13 +188,25 @@ export class AudioEngineService {
 
   public currentSource: AudioInputSource = 'DUAL_AUDIO';
   
-  // Real-time audio levels (0 to 100 for meters)
+  // Real-time audio levels (0 to 100 for meters, exponentially smoothed)
   public interviewerAudioLevel: number = 0;
   public candidateAudioLevel: number = 0;
 
   // Speech presence flags
   public isInterviewerSpeaking: boolean = false;
   public isCandidateSpeaking: boolean = false;
+
+  // Continuous Tab Audio Slicer state
+  private tabAudioStream: MediaStream | null = null;
+  private isContinuousCaptureActive: boolean = false;
+  private segmentRecorder: MediaRecorder | null = null;
+  private segmentChunks: Blob[] = [];
+  private segmentTimer: any = null;
+  private maxAudioLevelInSegment: number = 0;
+  private segmentStartTime: number = 0;
+  private segmentLastSpeechTime: number = 0;
+  private segmentHasSpeech: boolean = false;
+  private isFinalizingSegment: boolean = false;
 
   // Overall speech active (for backwards compat)
   public get isSpeechActive(): boolean {
@@ -207,15 +219,7 @@ export class AudioEngineService {
   // Sensitivity multiplier (default 1.8x)
   public micGainMultiplier: number = 1.8;
 
-  private interviewerSpeechStartTime: number = 0;
-  private interviewerLastSpeechTime: number = 0;
-  private isRecordingInterviewer: boolean = false;
-  private segmentMaxTimer: any = null;
-
   private onInterviewerSpeechCallback: ((blob: Blob) => void) | null = null;
-
-  // Silence threshold for interviewer speech (1600ms pause indicates end of thought/question)
-  public interviewerSilenceThresholdMs: number = 1600;
 
   /**
    * Starts Dual Audio Capture:
@@ -230,16 +234,16 @@ export class AudioEngineService {
     this.currentSource = 'DUAL_AUDIO';
     this.onInterviewerSpeechCallback = onInterviewerSpeechReady;
 
-    // 1. Capture Meeting Tab / Display Media with Audio
+    // 1. Capture Meeting Tab / Display Media with Audio (raw digital tab audio, no double-filtering)
     try {
       this.displayStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           displaySurface: 'browser'
         },
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
         }
       });
     } catch (err: any) {
@@ -263,7 +267,7 @@ export class AudioEngineService {
       };
     }
 
-    // 2. Capture Candidate Microphone
+    // 2. Capture Candidate Microphone (with hardware & OS echo cancellation + noise suppression)
     try {
       this.micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -278,7 +282,7 @@ export class AudioEngineService {
       console.warn('[AudioEngine] Candidate mic access error (will continue with tab audio):', err);
     }
 
-    // 3. Initialize Audio Nodes & VAD loop
+    // 3. Initialize Audio Nodes & Continuous Recording
     this.initDualAudioNodes();
 
     return {
@@ -309,7 +313,8 @@ export class AudioEngineService {
         source.connect(this.interviewerGain);
         this.interviewerGain.connect(this.interviewerAnalyser);
 
-        this.setupInterviewerRecorder(tabAudioStream);
+        // Start continuous segment capture for Interviewer tab audio
+        this.startContinuousInterviewerCapture(tabAudioStream);
       } catch (e) {
         console.error('[AudioEngine] Error initializing Interviewer AudioContext:', e);
       }
@@ -334,37 +339,105 @@ export class AudioEngineService {
     this.startDualVADLoop();
   }
 
-  // Sets up MediaRecorder to capture clean audio chunks when interviewer speaks
-  private setupInterviewerRecorder(audioStream: MediaStream) {
+  /**
+   * Continuous Segmented Audio Capture for Interviewer / Tab Audio:
+   * Slices tab audio into 4.5-second chunks continuously throughout the meeting.
+   * If speech energy is detected during the slice, emits the standalone WebM audio
+   * chunk for fast transcription. Runs uninterrupted even during continuous YouTube speech.
+   */
+  private startContinuousInterviewerCapture(stream: MediaStream) {
+    this.tabAudioStream = stream;
+    this.isContinuousCaptureActive = true;
+    this.recordNextInterviewerSegment();
+  }
+
+  private recordNextInterviewerSegment() {
+    if (!this.isContinuousCaptureActive || !this.tabAudioStream) return;
+
     try {
       const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : 'audio/webm';
 
-      this.interviewerRecorder = new MediaRecorder(audioStream, { mimeType: mime });
-      this.recordedChunks = [];
+      this.segmentChunks = [];
+      this.maxAudioLevelInSegment = 0;
+      this.segmentStartTime = Date.now();
+      this.segmentLastSpeechTime = 0;
+      this.segmentHasSpeech = false;
+      this.isFinalizingSegment = false;
 
-      this.interviewerRecorder.ondataavailable = (event) => {
+      this.segmentRecorder = new MediaRecorder(this.tabAudioStream, { mimeType: mime });
+
+      this.segmentRecorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
-          this.recordedChunks.push(event.data);
+          this.segmentChunks.push(event.data);
         }
       };
 
-      this.interviewerRecorder.onstop = () => {
-        if (this.recordedChunks.length > 0) {
-          const blob = new Blob(this.recordedChunks, { type: mime });
-          this.recordedChunks = [];
-          if (this.onInterviewerSpeechCallback && blob.size > 2000) {
+      this.segmentRecorder.onstop = () => {
+        const chunks = this.segmentChunks;
+        this.segmentChunks = [];
+        const maxLevel = this.maxAudioLevelInSegment;
+        const hadSpeech = this.segmentHasSpeech;
+
+        // If audio energy was detected (> 2.0 or hadSpeech) and blob is valid, emit for transcription
+        if (chunks.length > 0 && (maxLevel > 2.0 || hadSpeech) && this.isContinuousCaptureActive) {
+          const blob = new Blob(chunks, { type: mime });
+          if (this.onInterviewerSpeechCallback && blob.size > 1200) {
             this.onInterviewerSpeechCallback(blob);
           }
         }
+
+        // Immediately start next segment if still active
+        if (this.isContinuousCaptureActive) {
+          this.recordNextInterviewerSegment();
+        }
       };
-    } catch (e) {
-      console.warn('[AudioEngine] MediaRecorder not supported on this stream:', e);
+
+      this.segmentRecorder.start(200);
+
+      // Maximum segment duration (3.5s) to guarantee progressive updates during long speech
+      if (this.segmentTimer) clearTimeout(this.segmentTimer);
+      this.segmentTimer = setTimeout(() => {
+        this.finalizeInterviewerSegment();
+      }, 3500);
+
+    } catch (err) {
+      console.warn('[AudioEngine] Error starting interviewer segment:', err);
     }
   }
 
-  // Dual Voice Activity Detection (VAD) Loop
+  // Fast Finalization: stops segment immediately when a natural pause (500ms) occurs after speech
+  public finalizeInterviewerSegment() {
+    if (this.isFinalizingSegment) return;
+    this.isFinalizingSegment = true;
+    if (this.segmentTimer) {
+      clearTimeout(this.segmentTimer);
+      this.segmentTimer = null;
+    }
+    if (this.segmentRecorder && this.segmentRecorder.state === 'recording') {
+      try {
+        this.segmentRecorder.stop();
+      } catch (e) {}
+    }
+  }
+
+  private stopContinuousInterviewerCapture() {
+    this.isContinuousCaptureActive = false;
+    if (this.segmentTimer) {
+      clearTimeout(this.segmentTimer);
+      this.segmentTimer = null;
+    }
+    if (this.segmentRecorder && this.segmentRecorder.state === 'recording') {
+      try {
+        this.segmentRecorder.stop();
+      } catch (e) {}
+    }
+    this.segmentRecorder = null;
+    this.tabAudioStream = null;
+  }
+
+  // Dual Voice Activity Detection (VAD) Loop: Both meters update independently in parallel
   private startDualVADLoop() {
     const intBuffer = this.interviewerAnalyser ? new Uint8Array(this.interviewerAnalyser.frequencyBinCount) : null;
     const canBuffer = this.candidateAnalyser ? new Uint8Array(this.candidateAnalyser.frequencyBinCount) : null;
@@ -372,7 +445,7 @@ export class AudioEngineService {
     const updateLoop = () => {
       const now = Date.now();
 
-      // 1. Evaluate Interviewer Audio Level
+      // 1. Evaluate Interviewer Audio Level (Tab / Meeting audio)
       if (this.interviewerAnalyser && intBuffer) {
         this.interviewerAnalyser.getByteTimeDomainData(intBuffer);
         let sum = 0;
@@ -381,28 +454,35 @@ export class AudioEngineService {
           sum += val * val;
         }
         const rms = Math.sqrt(sum / intBuffer.length);
-        this.interviewerAudioLevel = Math.min(100, Math.round(rms * 450));
+        const targetIntLevel = Math.min(100, Math.round(rms * 450));
+        
+        // Exponential smoothing (low-pass filter)
+        this.interviewerAudioLevel = Math.round(this.interviewerAudioLevel * 0.7 + targetIntLevel * 0.3);
 
-        const speechThreshold = 2.2;
-        if (this.interviewerAudioLevel > speechThreshold) {
-          if (!this.isInterviewerSpeaking) {
-            this.isInterviewerSpeaking = true;
-            this.interviewerSpeechStartTime = now;
-            this.startInterviewerRecording();
-          }
-          this.interviewerLastSpeechTime = now;
+        if (this.interviewerAudioLevel > 2.8) {
+          this.isInterviewerSpeaking = true;
+          this.segmentHasSpeech = true;
+          this.segmentLastSpeechTime = now;
         } else {
-          if (this.isInterviewerSpeaking) {
-            // Sustained silence threshold reached after interviewer speech
-            if (now - this.interviewerLastSpeechTime > this.interviewerSilenceThresholdMs) {
-              this.isInterviewerSpeaking = false;
-              this.stopInterviewerRecording();
-            }
+          this.isInterviewerSpeaking = false;
+          // FAST NATURAL PAUSE FINALIZATION:
+          // If speech occurred in this segment, and interviewer has now paused for >= 500ms:
+          // Finalize chunk immediately instead of waiting for 3.5s!
+          if (this.segmentHasSpeech &&
+              !this.isFinalizingSegment &&
+              (now - this.segmentStartTime >= 750) &&
+              (now - this.segmentLastSpeechTime >= 500)) {
+            this.finalizeInterviewerSegment();
           }
+        }
+
+        // Track max level in current continuous slice
+        if (this.interviewerAudioLevel > this.maxAudioLevelInSegment) {
+          this.maxAudioLevelInSegment = this.interviewerAudioLevel;
         }
       }
 
-      // 2. Evaluate Candidate Audio Level
+      // 2. Evaluate Candidate Audio Level (Microphone - operates independently!)
       if (this.candidateAnalyser && canBuffer) {
         this.candidateAnalyser.getByteTimeDomainData(canBuffer);
         let sum = 0;
@@ -411,45 +491,17 @@ export class AudioEngineService {
           sum += val * val;
         }
         const rms = Math.sqrt(sum / canBuffer.length);
-        this.candidateAudioLevel = Math.min(100, Math.round(rms * 450));
-        this.isCandidateSpeaking = this.candidateAudioLevel > 2.5;
+        const targetCanLevel = Math.min(100, Math.round(rms * 450));
+        
+        // Exponential smoothing
+        this.candidateAudioLevel = Math.round(this.candidateAudioLevel * 0.7 + targetCanLevel * 0.3);
+        this.isCandidateSpeaking = this.candidateAudioLevel > 3.0;
       }
 
       this.animFrameId = requestAnimationFrame(updateLoop);
     };
 
     updateLoop();
-  }
-
-  private startInterviewerRecording() {
-    if (this.interviewerRecorder && this.interviewerRecorder.state === 'inactive') {
-      try {
-        this.recordedChunks = [];
-        this.interviewerRecorder.start(250);
-        this.isRecordingInterviewer = true;
-
-        // Auto-slice after 7 seconds max continuous speech to avoid huge latency
-        if (this.segmentMaxTimer) clearTimeout(this.segmentMaxTimer);
-        this.segmentMaxTimer = setTimeout(() => {
-          if (this.isInterviewerSpeaking && this.interviewerRecorder && this.interviewerRecorder.state === 'recording') {
-            this.stopInterviewerRecording();
-          }
-        }, 7000);
-      } catch (e) {}
-    }
-  }
-
-  private stopInterviewerRecording() {
-    if (this.segmentMaxTimer) {
-      clearTimeout(this.segmentMaxTimer);
-      this.segmentMaxTimer = null;
-    }
-    if (this.interviewerRecorder && this.interviewerRecorder.state === 'recording') {
-      try {
-        this.interviewerRecorder.stop();
-        this.isRecordingInterviewer = false;
-      } catch (e) {}
-    }
   }
 
   // Sets mic gain sensitivity multiplier
@@ -480,17 +532,12 @@ export class AudioEngineService {
     this.interviewerAudioLevel = 0;
     this.candidateAudioLevel = 0;
 
-    if (this.segmentMaxTimer) {
-      clearTimeout(this.segmentMaxTimer);
-      this.segmentMaxTimer = null;
-    }
-
     if (this.animFrameId) {
       cancelAnimationFrame(this.animFrameId);
       this.animFrameId = null;
     }
 
-    this.stopInterviewerRecording();
+    this.stopContinuousInterviewerCapture();
 
     if (this.displayStream) {
       this.displayStream.getTracks().forEach(t => t.stop());

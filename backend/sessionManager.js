@@ -140,11 +140,41 @@ class SessionManager {
         if (!Array.isArray(this.sessionData.conversationLog)) {
             this.sessionData.conversationLog = [];
         }
+
+        const cleanText = text.trim();
+        const cleanSpeaker = speaker.toUpperCase() === 'CANDIDATE' ? 'CANDIDATE' : 'INTERVIEWER';
+        const now = Date.now();
+
+        // Deduplicate rapid consecutive identical messages from same speaker within 2.5 seconds
+        const recent = this.sessionData.conversationLog.slice(-4);
+        for (const prev of recent) {
+            const timeDiff = now - new Date(prev.timestamp).getTime();
+            if (prev.speaker === cleanSpeaker && timeDiff < 2500) {
+                if (prev.text.toLowerCase().trim() === cleanText.toLowerCase().trim()) {
+                    console.log(`[SessionManager] Deduplicated consecutive message from ${cleanSpeaker}: "${cleanText}"`);
+                    return null;
+                }
+            }
+        }
+
+        // Progressive continuation: If previous message from INTERVIEWER was an incomplete fragment and within 5 seconds, stitch together
+        if (cleanSpeaker === 'INTERVIEWER' && this.sessionData.conversationLog.length > 0) {
+            const lastMsg = this.sessionData.conversationLog[this.sessionData.conversationLog.length - 1];
+            const timeDiff = now - new Date(lastMsg.timestamp).getTime();
+            if (lastMsg.speaker === 'INTERVIEWER' && timeDiff < 5000 && !lastMsg.text.endsWith('?')) {
+                lastMsg.text = `${lastMsg.text} ${cleanText}`.trim();
+                lastMsg.isQuestion = !!isQuestion;
+                lastMsg.timestamp = new Date().toISOString();
+                this.saveSession();
+                return lastMsg;
+            }
+        }
+
         const msg = {
             id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
             timestamp: new Date().toISOString(),
-            speaker: speaker.toUpperCase() === 'CANDIDATE' ? 'CANDIDATE' : 'INTERVIEWER',
-            text: text.trim(),
+            speaker: cleanSpeaker,
+            text: cleanText,
             isQuestion: !!isQuestion
         };
         this.sessionData.conversationLog.push(msg);

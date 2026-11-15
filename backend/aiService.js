@@ -10,8 +10,8 @@ const API_KEY = process.env.GEMINI_API_KEY;
 // Ultra-fast models with high availability and speed
 const FAST_MODELS = [
     'gemini-flash-lite-latest',
-    'gemini-3.5-flash-lite',
-    'gemini-3.5-flash'
+    'gemini-2.0-flash',
+    'gemini-1.5-flash'
 ];
 
 // Persistent HTTPS agent to reuse TLS connection
@@ -638,7 +638,7 @@ async function transcribeAudio(base64Audio, mimeType = 'audio/webm') {
         }],
         generationConfig: {
             temperature: 0.1,
-            maxOutputTokens: 250
+            maxOutputTokens: 120
         }
     };
 
@@ -646,7 +646,7 @@ async function transcribeAudio(base64Audio, mimeType = 'audio/webm') {
         try {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 4500);
+            const timeout = setTimeout(() => controller.abort(), 3500);
 
             const res = await fetch(url, {
                 method: 'POST',
@@ -661,7 +661,10 @@ async function transcribeAudio(base64Audio, mimeType = 'audio/webm') {
             const data = await res.json();
             const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
             const cleaned = text.trim();
-            if (!cleaned || cleaned.toUpperCase().includes('NO_SPEECH')) {
+            const lowerClean = cleaned.toLowerCase().replace(/[^a-z]/g, '');
+
+            // Strictly filter out "No speech", "NO_SPEECH", "None", or empty artifacts
+            if (!cleaned || lowerClean === 'nospeech' || lowerClean === 'no speech' || lowerClean.startsWith('nospeech') || cleaned === '.' || cleaned.length < 2) {
                 return '';
             }
             return normalizeQuestionText(cleaned);
@@ -672,28 +675,58 @@ async function transcribeAudio(base64Audio, mimeType = 'audio/webm') {
     return '';
 }
 
+// Words and prepositions that indicate an incomplete or trailing sentence/thought
+const DANGLING_WORDS = new Set([
+  'and', 'or', 'but', 'because', 'so', 'yet', 'while', 'whereas', 'although', 'since', 'if',
+  'in', 'on', 'at', 'to', 'for', 'from', 'with', 'without', 'by', 'about', 'into', 'through',
+  'during', 'before', 'after', 'between', 'under', 'against', 'via', 'of',
+  'the', 'a', 'an', 'this', 'that', 'these', 'those', 'my', 'your', 'our', 'their', 'its',
+  'is', 'are', 'was', 'were', 'do', 'does', 'did', 'have', 'has', 'had', 'can', 'could', 'will', 'would', 'should'
+]);
+
 /**
- * Checks if the interviewer's transcript represents a technical question or prompt requiring an answer.
+ * Checks if the interviewer's transcript represents a complete technical question or prompt requiring an answer.
+ * Rejects trailing fragments like "What is", "Can you explain the", "What are" to prevent premature answer triggers.
  */
 function isInterviewerQuestion(text) {
     if (!text || !text.trim()) return false;
     const clean = text.trim();
-    if (clean.includes('?')) return true;
+    const words = clean.split(/\s+/);
+    if (words.length < 2) return false;
+
+    // Filter trailing punctuation to check last word
+    const lastWord = words[words.length - 1].toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (DANGLING_WORDS.has(lastWord)) {
+        return false; // Trailing connector (e.g. "What is", "Can you explain the") -> INCOMPLETE!
+    }
+
+    // Direct question mark with at least 3 words: e.g. "What is DOM?", "What is CORS?"
+    if (clean.includes('?') && words.length >= 3) {
+        return true;
+    }
 
     const lower = clean.toLowerCase();
-    const questionStarters = /^(what|how|why|when|where|which|who|can you|could you|would you|have you|tell me|explain|describe|walk me through|differentiate|define|talk about|what about)/i;
-    if (questionStarters.test(lower)) return true;
+    const questionStarters = /^(what|how|why|when|where|which|who|can you|could you|would you|have you|did you|tell me|explain|describe|walk me through|differentiate|define|talk about|what about)/i;
 
-    // Direct topic prompts: e.g. "Controlled and uncontrolled components", "SOLID principles", "AsNoTracking"
-    const techMarkers = [
-        'react', 'angular', 'c#', 'csharp', 'asp.net', 'mvc', 'sql', 'azure', 'oop', 'linq',
-        'component', 'hooks', 'virtual dom', 'fiber', 'dependency injection', 'ioc',
-        'middleware', 'entity framework', 'ef core', 'index', 'stored procedure', 'deadlock',
-        'blob storage', 'service bus', 'key vault', 'solid', 'docker', 'kubernetes', 'microservices'
-    ];
-    for (const marker of techMarkers) {
-        if (lower.includes(marker) && clean.split(/\s+/).length >= 2) {
-            return true;
+    // Question starter with at least 3 substantive words (not ending in dangling connector):
+    // e.g. "What is polymorphism", "What is CORS", "What is an API", "Explain dependency injection"
+    if (questionStarters.test(lower) && words.length >= 3) {
+        return true;
+    }
+
+    // Direct concise topic prompts (2 to 6 words): e.g. "Controlled and uncontrolled components", "Fragments in React", "SOLID principles"
+    if (words.length >= 2 && words.length <= 6) {
+        const techMarkers = [
+            'react', 'angular', 'c#', 'csharp', 'asp.net', 'mvc', 'sql', 'azure', 'oop', 'linq',
+            'component', 'hooks', 'virtual dom', 'fiber', 'dependency injection', 'ioc',
+            'middleware', 'entity framework', 'ef core', 'index', 'stored procedure', 'deadlock',
+            'blob storage', 'service bus', 'key vault', 'solid', 'docker', 'kubernetes', 'microservices',
+            'fragments', 'props', 'state', 'cors', 'async', 'await'
+        ];
+        for (const marker of techMarkers) {
+            if (lower.includes(marker)) {
+                return true;
+            }
         }
     }
     return false;

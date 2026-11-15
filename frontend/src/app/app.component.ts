@@ -264,15 +264,19 @@ export class AppComponent implements OnInit, OnDestroy {
       case 'SPEECH_TRANSCRIBED': {
         const msg: ConversationMessage = payload.data;
         if (msg && msg.text) {
-          // Avoid duplicate messages with same id
-          if (!this.conversationMessages.some(m => m.id === msg.id)) {
+          const existing = this.conversationMessages.find(m => m.id === msg.id);
+          if (existing) {
+            existing.text = msg.text;
+            existing.isQuestion = msg.isQuestion;
+            existing.timestamp = msg.timestamp;
+          } else {
             this.conversationMessages.push(msg);
             this.scrollConversationToBottom();
           }
 
           if (msg.speaker === 'INTERVIEWER') {
             this.activeMeetingQuestion = msg.text;
-            if (msg.isQuestion && !this.loading) {
+            if (!this.loading) {
               this.question = msg.text;
             }
           }
@@ -378,12 +382,19 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   scrollConversationToBottom() {
-    setTimeout(() => {
+    requestAnimationFrame(() => {
       if (this.chatScrollContainerRef && this.chatScrollContainerRef.nativeElement) {
         const el = this.chatScrollContainerRef.nativeElement;
-        el.scrollTop = el.scrollHeight;
+        // Smooth scroll to bottom without jitter
+        const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+        if (isNearBottom || el.scrollTop === 0) {
+          el.scrollTo({
+            top: el.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
       }
-    }, 50);
+    });
   }
 
   // Whispers sentence 1 into headset
@@ -501,10 +512,18 @@ export class AppComponent implements OnInit, OnDestroy {
     this.isMeetingLive = true;
     this.isListening = true;
 
-    // Attach video track to preview element (Parakeet AI visual style)
+    // Attach video track ONLY to preview element (Parakeet AI visual style).
+    // CRITICAL: Strip all audio tracks from preview to prevent delayed speaker playback echo!
     setTimeout(() => {
       if (this.interviewerVideoRef && result.displayStream) {
-        this.interviewerVideoRef.nativeElement.srcObject = result.displayStream;
+        const videoTracks = result.displayStream.getVideoTracks();
+        if (videoTracks.length > 0) {
+          const videoOnlyStream = new MediaStream(videoTracks);
+          const videoEl = this.interviewerVideoRef.nativeElement;
+          videoEl.muted = true;
+          videoEl.volume = 0;
+          videoEl.srcObject = videoOnlyStream;
+        }
       }
     }, 150);
 
@@ -567,7 +586,17 @@ export class AppComponent implements OnInit, OnDestroy {
         // We log it as CANDIDATE speech (displayed on the RIGHT side).
         // CRITICAL: We NEVER trigger answer generation on candidate speech!
         if (bestFinalChunk.trim()) {
-          const correctedFinal = this.audioEngine.correctTechnicalTerms(bestFinalChunk.trim());
+          const rawText = bestFinalChunk.trim();
+
+          // Reject exact duplicate of candidate's own previous utterance within 2.5s
+          if (this.isDuplicateCandidateSpeech(rawText)) {
+            this.interimTranscript = '';
+            this.cdr.detectChanges();
+            return;
+          }
+
+          const correctedFinal = this.audioEngine.correctTechnicalTerms(rawText);
+
           if (this.ws && this.isConnected) {
             this.ws.send(JSON.stringify({
               type: 'LOG_CANDIDATE_SPEECH',
@@ -593,6 +622,25 @@ export class AppComponent implements OnInit, OnDestroy {
         }
       };
     }
+  }
+
+  /**
+   * Prevents rapid duplicate speech submissions for candidate
+   */
+  private isDuplicateCandidateSpeech(text: string): boolean {
+    const recentCand = this.conversationMessages
+      .filter(m => m.speaker === 'CANDIDATE')
+      .slice(-1)[0];
+    if (!recentCand) return false;
+
+    const now = Date.now();
+    const prevTime = new Date(recentCand.timestamp).getTime();
+    if (now - prevTime < 2500) {
+      if (recentCand.text.toLowerCase().trim() === text.toLowerCase().trim()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   startCandidateMic() {

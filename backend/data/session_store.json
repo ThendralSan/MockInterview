@@ -1,7 +1,7 @@
 {
   "sessionId": "default-session",
   "createdAt": "2026-11-14T02:50:43.246Z",
-  "updatedAt": "2026-11-15T02:23:02.382Z",
+  "updatedAt": "2026-11-15T03:36:07.362Z",
   "candidateProfile": {
     "experienceYears": 7,
     "primarySkills": "C#, ASP.NET, ASP.NET Core, ASP.NET MVC, Entity Framework Core, SQL Server, Microsoft Azure, React, Angular",
@@ -21,79 +21,148 @@
   },
   "history": [
     {
-      "id": "q_1794707145904_movgc",
-      "timestamp": "2026-11-15T01:45:45.904Z",
-      "question": "What is Angular",
-      "category": "ANGULAR",
-      "answer": "Angular is a robust, component-based TypeScript framework used for building scalable enterprise single-page applications. In our production architecture, we leverage standalone components for modularity, RxJS Observables for handling asynchronous data streams, and Signals for fine-grained reactivity. Dependency injection is built into its core, allowing us to manage services and maintain clean separation of concerns across large development teams.",
-      "spokenAnswer": "Angular is a robust, component-based TypeScript framework used for building scalable enterprise single-page applications. In our production architecture, we leverage standalone components for modularity, RxJS Observables for handling asynchronous data streams, and Signals for fine-grained reactivity. Dependency injection is built into its core, allowing us to manage services and maintain clean separation of concerns across large development teams.",
-      "bulletPoints": [
-        "Standalone components for modular architecture",
-        "RxJS Observables and Signals for reactive state management",
-        "Hierarchical Dependency Injection for service management"
-      ],
-      "code": null,
-      "latencyMs": 1811,
-      "firstTokenMs": 1474
-    },
-    {
-      "id": "q_1794707176549_0c4dy",
-      "timestamp": "2026-11-15T01:46:16.549Z",
-      "question": "What is polymergasm",
-      "category": "GENERAL",
-      "answer": "That term is not a recognized concept or feature within software engineering or any of our enterprise technology stacks. If you meant polymorphism, that is a core object-oriented programming principle allowing objects of different types to be treated through the same interface.",
-      "spokenAnswer": "That term is not a recognized concept or feature within software engineering or any of our enterprise technology stacks. If you meant polymorphism, that is a core object-oriented programming principle allowing objects of different types to be treated through the same interface.",
-      "bulletPoints": [
-        "Clarify misunderstanding of non-technical term",
-        "Pivot to recognized technical concepts if intended",
-        "Maintain professional and authoritative demeanor"
-      ],
-      "code": null,
-      "latencyMs": 1249,
-      "firstTokenMs": 875
-    },
-    {
-      "id": "q_1794707199664_n9y4n",
-      "timestamp": "2026-11-15T01:46:39.664Z",
-      "question": "What is a SOLID principles",
-      "category": "CSHARP",
-      "answer": "In our enterprise C# codebases, we strictly adhere to the SOLID principles to maintain high cohesion and low coupling across our object-oriented domain models and services. For instance, the Single Responsibility Principle ensures our classes have only one reason to change, while Dependency Inversion allows us to cleanly inject abstractions via constructors for testability. This design discipline prevents architectural degradation as our codebase scales across multiple engineering teams.",
-      "spokenAnswer": "In our enterprise C# codebases, we strictly adhere to the SOLID principles to maintain high cohesion and low coupling across our object-oriented domain models and services. For instance, the Single Responsibility Principle ensures our classes have only one reason to change, while Dependency Inversion allows us to cleanly inject abstractions via constructors for testability. This design discipline prevents architectural degradation as our codebase scales across multiple engineering teams.",
-      "bulletPoints": [
-        "Single Responsibility ensures classes have one clear domain duty",
-        "Open/Closed principle allows extension without modifying existing code",
-        "Dependency Inversion decouples components via constructor-injected interfaces"
-      ],
-      "code": null,
-      "latencyMs": 1797,
-      "firstTokenMs": 1311
-    },
-    {
-      "id": "q_1794709382382_haus5",
-      "timestamp": "2026-11-15T02:23:02.382Z",
-      "question": "What are controlled and uncontrolled components in React?",
+      "id": "q_1794713595350_68gyl",
+      "timestamp": "2026-11-15T03:33:15.350Z",
+      "question": "React, a powerful JavaScript library",
       "category": "REACT",
-      "answer": "In our React production applications, controlled components are form elements where state is fully managed by React components through useState, making React the single source of truth for the input's value. Uncontrolled components, on the other hand, manage their own state internally using standard DOM elements accessed via useRef, which we typically only use for low-level file inputs or direct integrations with legacy third-party libraries. We heavily favor controlled components for standard forms because they allow us to implement real-time validation, dynamic input formatting, and conditional button states seamlessly on every keystroke.",
-      "spokenAnswer": "In our React production applications, controlled components are form elements where state is fully managed by React components through useState, making React the single source of truth for the input's value. Uncontrolled components, on the other hand, manage their own state internally using standard DOM elements accessed via useRef, which we typically only use for low-level file inputs or direct integrations with legacy third-party libraries. We heavily favor controlled components for standard forms because they allow us to implement real-time validation, dynamic input formatting, and conditional button states seamlessly on every keystroke.",
+      "answer": "In our enterprise production applications, we leverage React's functional components and custom hooks to build high-performance, maintainable user interfaces. We rely on the Virtual DOM and React Fiber reconciliation engine to efficiently batch DOM updates, while optimizing heavy computations with useMemo and stabilizing callback references with useCallback to prevent unnecessary child re-renders. For complex global state management, we typically pair React with Zustand or Redux Toolkit, ensuring clean separation of concerns and predictable state transitions across large component trees.",
+      "spokenAnswer": "In our enterprise production applications, we leverage React's functional components and custom hooks to build high-performance, maintainable user interfaces. We rely on the Virtual DOM and React Fiber reconciliation engine to efficiently batch DOM updates, while optimizing heavy computations with useMemo and stabilizing callback references with useCallback to prevent unnecessary child re-renders. For complex global state management, we typically pair React with Zustand or Redux Toolkit, ensuring clean separation of concerns and predictable state transitions across large component trees.",
       "bulletPoints": [
-        "Controlled components rely on React state as the single source of truth.",
-        "Uncontrolled components store their own state in the DOM using refs.",
-        "Controlled components are preferred for real-time validation and conditional UI."
+        "Leverage functional components and custom hooks for modular UI logic",
+        "Optimize rendering performance using useMemo and useCallback",
+        "Manage global state efficiently with Zustand or Redux Toolkit"
       ],
-      "code": {
-        "language": "typescript",
-        "snippet": "// Controlled Component Example\nfunction ControlledInput() {\n  const [value, setValue] = useState('');\n  return <input value={value} onChange={(e) => setValue(e.target.value)} />;\n}"
-      },
-      "latencyMs": 2047,
-      "firstTokenMs": 1245
+      "code": null,
+      "latencyMs": 1216,
+      "firstTokenMs": 719
+    },
+    {
+      "id": "q_1794713603106_qjy66",
+      "timestamp": "2026-11-15T03:33:23.106Z",
+      "question": "However, since its invention back in the 2013, programmer",
+      "category": "REACT",
+      "answer": "In our large-scale production applications, we leverage React's component-driven architecture and fine-grained rendering control to maintain high performance over time. We heavily rely on hooks like useMemo and useCallback to optimize expensive calculations and prevent unnecessary child re-renders, while maintaining a predictable unidirectional data flow. Managing complex state is streamlined through robust state management patterns, allowing us to keep component trees clean and scalable as the application grows.",
+      "spokenAnswer": "In our large-scale production applications, we leverage React's component-driven architecture and fine-grained rendering control to maintain high performance over time. We heavily rely on hooks like useMemo and useCallback to optimize expensive calculations and prevent unnecessary child re-renders, while maintaining a predictable unidirectional data flow. Managing complex state is streamlined through robust state management patterns, allowing us to keep component trees clean and scalable as the application grows.",
+      "bulletPoints": [
+        "Leveraging functional components and custom hooks for modularity",
+        "Optimizing performance with useMemo, useCallback, and React Fiber reconciliation",
+        "Maintaining scalable state management across enterprise component trees"
+      ],
+      "code": null,
+      "latencyMs": 1802,
+      "firstTokenMs": 1079
+    },
+    {
+      "id": "q_1794713618885_qlr2y",
+      "timestamp": "2026-11-15T03:33:38.885Z",
+      "question": "Hello and welcome to this session on the top React interview questions and answers by Internet. React, a powerful JavaScript library developed by Jordan Walk, a software engineer at Meta. However, since its invention back in the 2013, programmer has always had a mixed reaction to it. Yet, React was selected as the second most used web framework. globally for 2024.",
+      "category": "REACT",
+      "answer": "In my enterprise work with React, its component-driven architecture and virtual DOM reconciliation have consistently allowed us to build highly responsive, complex user interfaces at scale. The flexibility of managing localized state alongside robust global state management patterns has proven invaluable for maintaining enterprise-grade applications. Performance tuning through memoization hooks and minimizing unnecessary re-renders remain core practices in our daily production pipelines to ensure optimal end-user experiences.",
+      "spokenAnswer": "In my enterprise work with React, its component-driven architecture and virtual DOM reconciliation have consistently allowed us to build highly responsive, complex user interfaces at scale. The flexibility of managing localized state alongside robust global state management patterns has proven invaluable for maintaining enterprise-grade applications. Performance tuning through memoization hooks and minimizing unnecessary re-renders remain core practices in our daily production pipelines to ensure optimal end-user experiences.",
+      "bulletPoints": [
+        "Component-driven architecture for scalable UI development",
+        "Efficient rendering performance via the Virtual DOM",
+        "Effective state management using hooks and modern patterns"
+      ],
+      "code": null,
+      "latencyMs": 1498,
+      "firstTokenMs": 978
+    },
+    {
+      "id": "q_1794713718260_xzus5",
+      "timestamp": "2026-11-15T03:35:18.260Z",
+      "question": "Uber 39% of developers using it. Another article Binance.com highlights various reasons why you should pursue ReactJS. Truth be told, React may have its quirky aspects, but with powerful features like",
+      "category": "REACT",
+      "answer": "In our enterprise production applications, we leverage React's component-driven architecture and fine-grained rendering control to build highly responsive UIs. By utilizing custom hooks and effective state management strategies with libraries like Zustand, we maintain clean separation of concerns and avoid unnecessary re-renders. This ensures our high-throughput dashboards scale smoothly while maintaining optimal performance metrics for end users.",
+      "spokenAnswer": "In our enterprise production applications, we leverage React's component-driven architecture and fine-grained rendering control to build highly responsive UIs. By utilizing custom hooks and effective state management strategies with libraries like Zustand, we maintain clean separation of concerns and avoid unnecessary re-renders. This ensures our high-throughput dashboards scale smoothly while maintaining optimal performance metrics for end users.",
+      "bulletPoints": [
+        "Leveraging component-driven architecture for scalability",
+        "Optimizing rendering performance with custom hooks and memoization",
+        "Managing complex state efficiently to prevent re-render bottlenecks"
+      ],
+      "code": null,
+      "latencyMs": 1637,
+      "firstTokenMs": 1169
+    },
+    {
+      "id": "q_1794713741759_yacjd",
+      "timestamp": "2026-11-15T03:35:41.759Z",
+      "question": "whole ecosystem of features. It is a force to be reckoned with. Moreover, the 8000+ job opportunities an an average annual salary of 4 lakhs further proves it demand and importance within the tech industry. with me, then let's get started with this video. As mentioned",
+      "category": "REACT",
+      "answer": "In our enterprise React applications, we leverage the full ecosystem including custom hooks, state management libraries like Redux Toolkit, and performance optimization techniques like memoization to build scalable architectures. We manage complex component trees efficiently by utilizing the Virtual DOM and React Fiber reconciliation algorithms to minimize unnecessary re-renders. A key production practice we enforce is modular component design coupled with strict TypeScript typing to maintain code quality across large distributed teams.",
+      "spokenAnswer": "In our enterprise React applications, we leverage the full ecosystem including custom hooks, state management libraries like Redux Toolkit, and performance optimization techniques like memoization to build scalable architectures. We manage complex component trees efficiently by utilizing the Virtual DOM and React Fiber reconciliation algorithms to minimize unnecessary re-renders. A key production practice we enforce is modular component design coupled with strict TypeScript typing to maintain code quality across large distributed teams.",
+      "bulletPoints": [
+        "Leveraging functional components and custom hooks for business logic encapsulation",
+        "Optimizing rendering performance with useMemo, useCallback, and React Fiber",
+        "Scaling state management reliably across enterprise-grade application trees"
+      ],
+      "code": null,
+      "latencyMs": 2413,
+      "firstTokenMs": 1858
     }
   ],
   "conversationLog": [
     {
-      "id": "msg_1794709378821_o25i",
-      "timestamp": "2026-11-15T02:22:58.821Z",
+      "id": "msg_1794713571808_940n",
+      "timestamp": "2026-11-15T03:32:51.808Z",
       "speaker": "CANDIDATE",
-      "text": "Now. Tell me, what is your name?",
+      "text": "However",
+      "isQuestion": false
+    },
+    {
+      "id": "msg_1794713573155_i6wo",
+      "timestamp": "2026-11-15T03:32:53.155Z",
+      "speaker": "INTERVIEWER",
+      "text": "However,",
+      "isQuestion": false
+    },
+    {
+      "id": "msg_1794713586938_ug3n",
+      "timestamp": "2026-11-15T03:33:30.447Z",
+      "speaker": "INTERVIEWER",
+      "text": "Hello and welcome to this session on the top React interview questions and answers by Internet. React, a powerful JavaScript library developed by Jordan Walk, a software engineer at Meta. However, since its invention back in the 2013, programmer has always had a mixed reaction to it. Yet, React was selected as the second most used web framework. globally for 2024.",
+      "isQuestion": false
+    },
+    {
+      "id": "msg_1794713615919_wd4k",
+      "timestamp": "2026-11-15T03:33:35.919Z",
+      "speaker": "CANDIDATE",
+      "text": "Hello and welcome to this session on the top react interview questions and answers by internet react a powerful JavaScript library developed by Jordan work a software engineer at meta however since its invention back in the 2020 programmers always had a mixed reaction to it yet react was enacted as the second most used web framework globally for 2024.",
+      "isQuestion": false
+    },
+    {
+      "id": "msg_1794713629933_f440",
+      "timestamp": "2026-11-15T03:33:49.933Z",
+      "speaker": "CANDIDATE",
+      "text": "Now tell me what is the difference injection",
+      "isQuestion": false
+    },
+    {
+      "id": "msg_1794713650730_yh99",
+      "timestamp": "2026-11-15T03:34:10.730Z",
+      "speaker": "CANDIDATE",
+      "text": "Tell me about yourself",
+      "isQuestion": false
+    },
+    {
+      "id": "msg_1794713702152_03r7",
+      "timestamp": "2026-11-15T03:35:15.406Z",
+      "speaker": "INTERVIEWER",
+      "text": "Uber 39% of developers using it. Another article Binance.com highlights various reasons why you should pursue ReactJS. Truth be told, React may have its quirky aspects, but with powerful features like",
+      "isQuestion": false
+    },
+    {
+      "id": "msg_1794713723098_gszu",
+      "timestamp": "2026-11-15T03:35:47.578Z",
+      "speaker": "INTERVIEWER",
+      "text": "whole ecosystem of features. It is a force to be reckoned with. Moreover, the 8000+ job opportunities an an average annual salary of 4 lakhs further proves it demand and importance within the tech industry. with me, then let's get started with this video. As mentioned We're going to discuss 20 questions in this particular video. It's all been put together by our top one-person industry experts who have over 7 years of experience in the web",
+      "isQuestion": false
+    },
+    {
+      "id": "msg_1794713767361_c7vu",
+      "timestamp": "2026-11-15T03:36:07.361Z",
+      "speaker": "CANDIDATE",
+      "text": "Over 39 of developers using entries another article by nascom highlights various reasons why you should pursue react.js truth be told react may have its quirky aspects but with powerful features like the virtual Dom hooks to condex API and a full ecosystem of features it is a force to be reckoned with moreover the 8 000 plus job opportunities and an average annual salary of whole lags further proves its demand and importance within the Tech industry if you're still with me then let's get started with this video as mentioned earlier we're going to discuss 20 questions in this particular video which have been put together by our top one person industry experts who are over seven years of experience in the web",
       "isQuestion": false
     }
   ]

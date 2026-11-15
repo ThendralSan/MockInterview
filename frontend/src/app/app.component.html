@@ -87,7 +87,7 @@
             #interviewerVideo 
             autoplay 
             playsinline 
-            muted 
+            [muted]="true"
             class="tab-video-player"
             [class.hidden]="!isMeetingLive">
           </video>
@@ -235,14 +235,19 @@
           </div>
         </div>
 
-        <!-- Live Typing / Speaking Indicator -->
-        <div *ngIf="audioEngine.isInterviewerSpeaking" class="live-speaking-indicator interviewer-speaking">
+      </div>
+
+      <!-- FIXED-HEIGHT CONVERSATION STATUS BAR (Zero DOM layout shift, completely prevents UI shaking) -->
+      <div class="conversation-live-bar">
+        <div class="live-speaking-indicator interviewer-speaking" 
+             [class.visible]="audioEngine.isInterviewerSpeaking">
           <span class="typing-dots">
             <span></span><span></span><span></span>
           </span>
           Interviewer 1 is speaking...
         </div>
-        <div *ngIf="audioEngine.isCandidateSpeaking" class="live-speaking-indicator candidate-speaking">
+        <div class="live-speaking-indicator candidate-speaking" 
+             [class.visible]="audioEngine.isCandidateSpeaking">
           <span class="typing-dots">
             <span></span><span></span><span></span>
           </span>

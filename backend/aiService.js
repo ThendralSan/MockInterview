@@ -7,11 +7,9 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const API_KEY = process.env.GEMINI_API_KEY;
 
-// Ultra-fast models with high availability and speed
+// Ultra-fast model with native multimodal audio capabilities and high availability (~1.2s - 2.0s latency)
 const FAST_MODELS = [
-    'gemini-flash-lite-latest',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash'
+    'gemini-flash-lite-latest'
 ];
 
 // Persistent HTTPS agent to reuse TLS connection
@@ -154,7 +152,20 @@ const TECH_REPLACEMENTS = [
     [/\b(read is|red is|radish)\b/gi, 'Redis'],
     [/\b(rabbit m q|rabbit mq)\b/gi, 'RabbitMQ'],
     [/\b(micro services|micro service)\b/gi, 'microservices'],
-    [/\b(ci cd|c i c d|c i slash c d|continuous integration)\b/gi, 'CI/CD']
+    [/\b(ci cd|c i c d|c i slash c d|continuous integration)\b/gi, 'CI/CD'],
+
+    // 12. AI / LLM / RAG / Machine Learning & Modern Architecture
+    [/\b(what('s| is| are)? (a |the )?)(rag|wrag|r a g|r\.a\.g\.|our a g|drag|are a g)\b/gi, '$1RAG'],
+    [/\b(retrieval augmented generation|retrieval-augmented generation)\b/gi, 'Retrieval-Augmented Generation (RAG)'],
+    [/\b(r a g architecture|rag architecture|rag pipeline|rag system|rag pattern)\b/gi, 'RAG architecture'],
+    [/\b(what('s| is| are)? (a |an )?)(l l m|l\.l\.m\.|large language model)\b/gi, '$1an LLM'],
+    [/\b(l l m s?|l\.l\.m\.s?)\b/gi, 'LLM'],
+    [/\b(vector db|vector database|vector stores?)\b/gi, 'vector database'],
+    [/\b(semantic search|similarity search)\b/gi, 'semantic search'],
+    [/\b(lang chain|langchain|llama index|llamaindex|semantic kernel)\b/gi, 'LangChain / Semantic Kernel'],
+    [/\b(fine tuning|fine-tuning)\b/gi, 'fine-tuning'],
+    [/\b(prompt engineering)\b/gi, 'prompt engineering'],
+    [/\b(vector embeddings|embeddings)\b/gi, 'embeddings']
 ];
 
 function normalizeQuestionText(raw) {
@@ -184,11 +195,13 @@ YOUR 9 CORE TECHNICAL DOMAINS:
 7. Microsoft Azure (App Services, Azure Functions, Blob Storage, Key Vault, Service Bus, Azure SQL, Application Insights)
 8. React (Functional components, Hooks: useState, useEffect, useMemo, useCallback, Virtual DOM, Fiber, State Management: Redux/Zustand)
 9. Angular (Standalone components, Hierarchical DI, RxJS Observables, Signals, OnPush change detection, Route Guards, Interceptors)
+10. JavaScript & TypeScript (ESNext, Event Loop, Closures, Scoping, Async/Await, Promises, Prototypes, Immutability, Modern Web API)
 
 CRITICAL DIRECTIVES:
 1. TARGETED TECHNOLOGY ANSWER:
-   - Identify which of the 9 technologies the interviewer is asking about.
+   - Identify which technical domain the interviewer is asking about.
    - If asked a C# question (e.g. "What is OOP?", "What is polymorphism?", "What is an interface?", "What is encapsulation?"), answer strictly in the context of C#.
+   - If asked about JavaScript or TypeScript, answer directly in the context of modern JavaScript/TypeScript.
    - If asked about React, answer strictly in the context of React.
    - If asked about Angular, answer strictly in the context of Angular.
    - If asked about ASP.NET MVC, answer strictly in the context of ASP.NET MVC.
@@ -246,65 +259,40 @@ RESPONSE FORMAT (Strictly valid JSON):
 }
 
 /**
- * Streams the response with ultra-fast latency.
+ * Executes an ultra-fast streaming request to Gemini using keep-alive TLS connection pooling.
+ * Cuts TCP/TLS negotiation overhead to deliver first tokens in ~1-1.5s.
  */
-async function streamInterviewAnswer(rawQuestion, sessionManager, onChunk, onComplete) {
-    const question = normalizeQuestionText(rawQuestion);
-    const candidateProfile = sessionManager.getCandidateProfile();
-    const contextSummary = sessionManager.getContextSummary();
+function streamGeminiRequest(model, payload, timeoutMs, onChunk) {
+    return new Promise((resolve, reject) => {
+        let isDone = false;
+        let accumulated = "";
+        let firstTokenTime = null;
+        const startTime = Date.now();
 
-    const systemPrompt = buildSystemPrompt(candidateProfile, contextSummary);
-    const payload = {
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ role: "user", parts: [{ text: `Interviewer asks: "${question}"` }] }],
-        generationConfig: {
-            temperature: 0.25,
-            topP: 0.85,
-            maxOutputTokens: 700, // Ample token space preventing truncated JSON objects
-            responseMimeType: "application/json"
-        }
-    };
-
-    const startTime = Date.now();
-    let accumulatedText = "";
-    let modelUsed = "";
-    let firstTokenTime = null;
-
-    for (const model of FAST_MODELS) {
-        try {
-            console.log(`[AIService] Fast stream with: ${model}`);
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${API_KEY}`;
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 3500); // 3.5s timeout per model
-
-            const res = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-                signal: controller.signal
-            });
-            clearTimeout(timeout);
-
-            if (!res.ok) {
-                console.warn(`[AIService] Model ${model} returned HTTP ${res.status}`);
-                continue;
+        const req = https.request({
+            hostname: 'generativelanguage.googleapis.com',
+            path: `/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${API_KEY}`,
+            method: 'POST',
+            agent: httpsAgent,
+            headers: { 'Content-Type': 'application/json' }
+        }, (res) => {
+            if (res.statusCode !== 200) {
+                if (initialTimeout) clearTimeout(initialTimeout);
+                isDone = true;
+                return reject(new Error(`HTTP ${res.statusCode}`));
             }
 
-            modelUsed = model;
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
             let buffer = "";
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
+            res.on('data', chunk => {
+                if (initialTimeout) {
+                    clearTimeout(initialTimeout);
+                    initialTimeout = null;
+                }
                 if (!firstTokenTime) {
                     firstTokenTime = Date.now() - startTime;
                     console.log(`⚡ [AIService] FIRST TOKEN in ${firstTokenTime}ms from ${model}`);
                 }
-
-                buffer += decoder.decode(value, { stream: true });
+                buffer += chunk.toString();
                 const lines = buffer.split('\n');
                 buffer = lines.pop();
 
@@ -318,16 +306,76 @@ async function streamInterviewAnswer(rawQuestion, sessionManager, onChunk, onCom
                             if (candidate && candidate.content && candidate.content.parts) {
                                 const delta = candidate.content.parts[0].text;
                                 if (delta) {
-                                    accumulatedText += delta;
-                                    if (onChunk) onChunk(delta, accumulatedText);
+                                    accumulated += delta;
+                                    if (onChunk) onChunk(delta, accumulated);
                                 }
                             }
                         } catch (e) {}
                     }
                 }
-            }
+            });
 
-            if (accumulatedText.length > 20) {
+            res.on('end', () => {
+                if (initialTimeout) clearTimeout(initialTimeout);
+                isDone = true;
+                resolve({ text: accumulated, firstTokenTime, totalTime: Date.now() - startTime });
+            });
+        });
+
+        let initialTimeout = setTimeout(() => {
+            if (!firstTokenTime) {
+                req.destroy(new Error(`Initial token timeout after ${timeoutMs}ms`));
+            }
+        }, timeoutMs);
+
+        req.on('error', (err) => {
+            if (initialTimeout) clearTimeout(initialTimeout);
+            if (!isDone) reject(err);
+        });
+
+        req.write(JSON.stringify(payload));
+        req.end();
+    });
+}
+
+/**
+ * Streams the response with ultra-fast latency.
+ */
+async function streamInterviewAnswer(rawQuestion, sessionManager, onChunk, onComplete) {
+    const question = normalizeQuestionText(rawQuestion);
+    const cleanQ = (question || '').trim();
+    if (!cleanQ || cleanQ.length < 4 || cleanQ.toLowerCase() === 'what is' || cleanQ.toLowerCase() === 'can you' || cleanQ.toLowerCase() === 'tell me') {
+        console.warn(`[AIService] Refusing answer generation on incomplete fragment: "${rawQuestion}"`);
+        return null;
+    }
+    const candidateProfile = sessionManager.getCandidateProfile();
+    const contextSummary = sessionManager.getContextSummary();
+
+    const systemPrompt = buildSystemPrompt(candidateProfile, contextSummary);
+    const payload = {
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ role: "user", parts: [{ text: `Interviewer asks: "${question}"` }] }],
+        generationConfig: {
+            temperature: 0.2,
+            topP: 0.85,
+            maxOutputTokens: 600,
+            responseMimeType: "application/json"
+        }
+    };
+
+    const startTime = Date.now();
+    let accumulatedText = "";
+    let modelUsed = "";
+    let firstTokenTime = null;
+
+    for (const model of FAST_MODELS) {
+        try {
+            console.log(`[AIService] Fast stream with: ${model}`);
+            const result = await streamGeminiRequest(model, payload, 4800, onChunk);
+            if (result && result.text && result.text.length > 20) {
+                accumulatedText = result.text;
+                modelUsed = model;
+                firstTokenTime = result.firstTokenTime;
                 break;
             }
         } catch (err) {
@@ -370,7 +418,7 @@ async function streamInterviewAnswer(rawQuestion, sessionManager, onChunk, onCom
         spokenAnswer: parsedResult.answer || parsedResult.spokenAnswer || "",
         bulletPoints: Array.isArray(parsedResult.bulletPoints) ? parsedResult.bulletPoints : [],
         code: parsedResult.code || null,
-        latencyMs: totalDuration,
+        latencyMs: firstTokenTime || totalDuration,
         firstTokenMs: firstTokenTime || totalDuration,
         modelUsed: modelUsed || 'fallback'
     };
@@ -387,7 +435,77 @@ async function streamInterviewAnswer(rawQuestion, sessionManager, onChunk, onCom
 function generateHandsOnFallback(question) {
     const q = question.toLowerCase();
 
-    // 1. C# / OOP Concepts (Strictly C# Context)
+    // 0. AI / RAG / Vector Database / LLM Architecture
+    if (q.includes('rag') || q.includes('retrieval augmented') || q.includes('vector db') || q.includes('vector search') || q.includes('embedding') || q.includes('llm')) {
+        return {
+            category: "ARCHITECTURE",
+            answer: "Retrieval-Augmented Generation (RAG) is an architectural pattern that grounds Large Language Models on external, authoritative domain knowledge retrieved dynamically at query time. In our enterprise production systems, we ingest business documents, chunk them semantically, and generate dense vector embeddings. When a user or client submits a query, we perform semantic similarity search against a vector database (such as Azure AI Search or Qdrant) to retrieve the top-K relevant passages, which are injected directly into the LLM system prompt. This eliminates model hallucinations, guarantees factual enterprise accuracy, and allows continuous knowledge updates without expensive model retraining.",
+            bulletPoints: [
+                "Ingests enterprise documents into semantically chunked vector embeddings",
+                "Performs dynamic top-K similarity search against a vector store at query time",
+                "Mitigates LLM hallucinations and provides grounded, citeable enterprise answers"
+            ],
+            code: null
+        };
+    }
+
+    // 1. Async and Await / Concurrency
+    if (q.includes('async') || q.includes('await') || q.includes('task')) {
+        return {
+            category: "CSHARP",
+            answer: "In C# and ASP.NET Core, async and await is fundamentally about thread pool scalability rather than making a single query run faster. When an I/O-bound operation like a database call or microservice HTTP request is awaited, the thread is released back to the thread pool to handle other incoming requests, preventing thread pool starvation under high concurrent traffic. In our services, we enforce 'async all the way down' and strictly forbid blocking calls like .Result or .Wait() because they can cause severe deadlocks. In class libraries and non-UI code, we also use ConfigureAwait(false) to avoid unnecessary synchronization context captures.",
+            bulletPoints: [
+                "Frees up thread pool threads during I/O-bound operations",
+                "Avoids thread pool starvation under high concurrent request load",
+                "Strict rule: Never block on async code with .Result or .Wait()"
+            ],
+            code: null
+        };
+    }
+
+    // 2. Dependency Injection
+    if (q.includes('dependency injection') || q.includes('di') || q.includes('ioc')) {
+        return {
+            category: "ASPNET_CORE",
+            answer: "In ASP.NET Core, Dependency Injection is built natively into the framework via IServiceCollection. We configure service lifetimes strictly based on their state and concurrency requirements: Transient for lightweight, stateless utility operations; Scoped for components that share state within a single HTTP request, such as our EF Core DbContext; and Singleton for expensive, thread-safe instances like our Redis multiplexer or HttpClientFactory. A critical anti-pattern we guard against is captive dependencies, such as injecting a Scoped service into a Singleton, which can cause DbContext concurrency exceptions and memory leaks.",
+            bulletPoints: [
+                "Native ASP.NET Core DI with Transient, Scoped, and Singleton lifetimes",
+                "DbContext is always Scoped to the individual HTTP request",
+                "Prevent captive dependencies (never inject Scoped into Singleton)"
+            ],
+            code: null
+        };
+    }
+
+    // 3. CORS / Cross-Origin Resource Sharing
+    if (q.includes('cors') || q.includes('cross origin')) {
+        return {
+            category: "ASPNET_CORE",
+            answer: "CORS is a browser security mechanism that restricts cross-origin HTTP requests. In our production systems, we configure explicit CORS policies in the backend pipeline using builder.Services.AddCors(). The most important production best practice we enforce is never combining AllowAnyOrigin() with AllowCredentials(), which is a severe security vulnerability rejected by modern browsers. Instead, we configure explicit allowed origins bound to our environment configurations, explicitly specify allowed HTTP methods and headers, and place the CORS middleware in the exact correct pipeline order—after routing and before authentication and authorization.",
+            bulletPoints: [
+                "Browser security mechanism restricting cross-origin HTTP calls",
+                "Configured via explicit origin, method, and header whitelisting",
+                "Strict pipeline order: after UseRouting and before UseAuthentication"
+            ],
+            code: null
+        };
+    }
+
+    // 3b. JavaScript & TypeScript / Core Web Engineering
+    if (q.includes('javascript') || q.includes('typescript') || q.includes('closure') || q.includes('event loop') || q.includes('prototype') || q.includes('promise')) {
+        return {
+            category: "REACT",
+            answer: "JavaScript is a single-threaded, non-blocking, asynchronous concurrent runtime powered by an event loop. In modern enterprise frontend architecture, we write strongly-typed TypeScript compiled with ESNext standards. We leverage asynchronous programming with Promises and async/await to keep the main thread responsive, manage lexical scopes and encapsulation using closures, and enforce functional programming paradigms with pure functions and immutability for predictable state management across our web applications.",
+            bulletPoints: [
+                "Single-threaded event loop architecture handling non-blocking asynchronous I/O",
+                "Lexical scoping, closures, and prototypical inheritance fundamentals",
+                "Strongly typed via TypeScript with modern ES6+ paradigms"
+            ],
+            code: null
+        };
+    }
+
+    // 4. C# / OOP Concepts (Strictly C# Context)
     if (q.includes('oop') || q.includes('object oriented') || q.includes('polymorphism') || 
         q.includes('encapsulation') || q.includes('inheritance') || q.includes('abstraction') || 
         q.includes('c#') || q.includes('linq') || q.includes('garbage collection')) {
@@ -418,7 +536,19 @@ function generateHandsOnFallback(question) {
     }
 
     // 2. React / React Hooks / Virtual DOM / Fiber / Props (STRICTLY PURE REACT - NO ANGULAR)
-    if (q.includes('react') || q.includes('fiber') || q.includes('children prop') || q.includes('useeffect') || q.includes('usestate')) {
+    if (q.includes('react') || q.includes('fiber') || q.includes('children prop') || q.includes('useeffect') || q.includes('usestate') || q.includes('controlled')) {
+        if (q.includes('controlled') || q.includes('uncontrolled')) {
+            return {
+                category: "REACT",
+                answer: "In React, controlled and uncontrolled components are two ways to manage form input values. In a controlled component, React state is the single source of truth: input values come from state, and an onChange handler updates that state, giving us full control over validation and conditional submission. In an uncontrolled component, the DOM maintains its own internal state, and we access the input value using a ref. In enterprise production, I prefer controlled components for complex forms requiring live validation, while uncontrolled components are ideal for simple forms or file uploads.",
+                bulletPoints: [
+                    "Controlled: React state is the single source of truth via onChange",
+                    "Uncontrolled: DOM manages input value directly, accessed via useRef",
+                    "Controlled preferred for live validation; uncontrolled for file inputs or legacy DOM"
+                ],
+                code: null
+            };
+        }
         if (q.includes('children prop')) {
             return {
                 category: "REACT",
@@ -469,8 +599,20 @@ function generateHandsOnFallback(question) {
         };
     }
 
-    // 4. ASP.NET MVC / Model Binding
-    if (q.includes('asp.net mvc') || q.includes('model binding') || q.includes('razor') || q.includes('action filter') || q.includes('viewbag')) {
+    // 4. ASP.NET MVC / Web API / Model Binding
+    if (q.includes('mvc') || q.includes('model binding') || q.includes('razor') || q.includes('action filter') || q.includes('viewbag')) {
+        if (q.includes('web api') || q.includes('api') || q.includes('versus') || q.includes('difference')) {
+            return {
+                category: "ASPNET_CORE",
+                answer: "In ASP.NET, the fundamental difference between ASP.NET MVC and Web API is the client they serve and the output they deliver. ASP.NET MVC is tailored for rendering full HTML views directly to human browser clients using controllers that return ViewResult with Razor markup. In contrast, Web API is built specifically for creating RESTful HTTP endpoints that return raw, structured data (JSON or XML) to client-side SPAs, mobile apps, and external services. In modern ASP.NET Core, Microsoft unified these into a single controller pipeline where ControllerBase powers Web APIs and Controller powers MVC views, sharing model binding, routing, and filters.",
+                bulletPoints: [
+                    "ASP.NET MVC renders HTML views via Razor for human browser interaction",
+                    "Web API returns raw structured data (JSON/XML) for SPAs and mobile applications",
+                    "Unified in ASP.NET Core: ControllerBase for APIs and Controller for Views"
+                ],
+                code: null
+            };
+        }
         return {
             category: "ASPNET_MVC",
             answer: "In ASP.NET MVC, Model Binding maps incoming HTTP request data—such as query string parameters, route segments, and form post fields—directly to strongly typed action method parameters and model classes. Value providers extract values from various request parts, while model binders handle type conversion and validation using DataAnnotations. In production, we implement custom model binders for complex payloads like localized dates or encrypted identifiers to eliminate boilerplate parsing in controllers.",
@@ -554,47 +696,6 @@ function generateHandsOnFallback(question) {
         };
     }
 
-    // 10. CORS / Cross-Origin Resource Sharing
-    if (q.includes('cors') || q.includes('cross origin')) {
-        return {
-            category: "ASPNET_CORE",
-            answer: "CORS is a browser security mechanism that restricts cross-origin HTTP requests. In our production systems, we configure explicit CORS policies in the backend pipeline using builder.Services.AddCors(). The most important production best practice we enforce is never combining AllowAnyOrigin() with AllowCredentials(), which is a severe security vulnerability rejected by modern browsers. Instead, we configure explicit allowed origins bound to our environment configurations, explicitly specify allowed HTTP methods and headers, and place the CORS middleware in the exact correct pipeline order—after routing and before authentication and authorization.",
-            bulletPoints: [
-                "Browser security mechanism restricting cross-origin HTTP calls",
-                "Configured via explicit origin, method, and header whitelisting",
-                "Strict pipeline order: after UseRouting and before UseAuthentication"
-            ],
-            code: null
-        };
-    }
-
-    // 11. Async and Await
-    if (q.includes('async') || q.includes('await')) {
-        return {
-            category: "CSHARP",
-            answer: "In C# and ASP.NET Core, async and await is fundamentally about thread pool scalability rather than making a single query run faster. When an I/O-bound operation like a database call or microservice HTTP request is awaited, the thread is released back to the thread pool to handle other incoming requests, preventing thread pool starvation under high concurrent traffic. In our services, we enforce 'async all the way down' and strictly forbid blocking calls like .Result or .Wait() because they can cause severe deadlocks. In class libraries and non-UI code, we also use ConfigureAwait(false) to avoid unnecessary synchronization context captures.",
-            bulletPoints: [
-                "Frees up thread pool threads during I/O-bound operations",
-                "Avoids thread pool starvation under high concurrent request load",
-                "Strict rule: Never block on async code with .Result or .Wait()"
-            ],
-            code: null
-        };
-    }
-
-    // 12. Dependency Injection
-    if (q.includes('dependency injection') || q.includes('di') || q.includes('ioc')) {
-        return {
-            category: "ASPNET_CORE",
-            answer: "In ASP.NET Core, Dependency Injection is built natively into the framework via IServiceCollection. We configure service lifetimes strictly based on their state and concurrency requirements: Transient for lightweight, stateless utility operations; Scoped for components that share state within a single HTTP request, such as our EF Core DbContext; and Singleton for expensive, thread-safe instances like our Redis multiplexer or HttpClientFactory. A critical anti-pattern we guard against is captive dependencies, such as injecting a Scoped service into a Singleton, which can cause DbContext concurrency exceptions and memory leaks.",
-            bulletPoints: [
-                "Native ASP.NET Core DI with Transient, Scoped, and Singleton lifetimes",
-                "DbContext is always Scoped to the individual HTTP request",
-                "Prevent captive dependencies (never inject Scoped into Singleton)"
-            ],
-            code: null
-        };
-    }
 
     // 13. General Production Experience Fallback
     return {
@@ -610,8 +711,8 @@ function generateHandsOnFallback(question) {
 }
 
 /**
- * Fast speech-to-text transcriber for interviewer meeting audio chunks.
- * Handles audio/webm, audio/wav, audio/ogg from browser MediaRecorder.
+ * Ultra-fast speech-to-text transcriber for interviewer meeting audio chunks.
+ * Streamlined system instruction and greedy decoding (temperature: 0.0) for sub-400ms latency.
  */
 async function transcribeAudio(base64Audio, mimeType = 'audio/webm') {
     if (!base64Audio) return '';
@@ -619,7 +720,7 @@ async function transcribeAudio(base64Audio, mimeType = 'audio/webm') {
     const payload = {
         system_instruction: {
             parts: [{
-                text: "You are a fast, high-accuracy speech-to-text transcriber for software engineering technical interviews. Transcribe the spoken speech verbatim in English. Ensure correct technical capitalization and terminology for developer frameworks and languages (e.g., C#, .NET, ASP.NET Core, ASP.NET MVC, React, Angular, TypeScript, SQL Server, Azure, OOP, Entity Framework Core, AsNoTracking, RxJS, Signals, etc.). If the audio contains no clear human speech, background noise only, or music, reply with exactly 'NO_SPEECH'."
+                text: "You are a strict verbatim speech transcriber. Transcribe only the exact spoken words in the audio. If the audio contains only silence, music, typing, breath, background noise, or no clear human speech, you MUST output strictly: NO_SPEECH. Never guess, invent, or hallucinate interview questions."
             }]
         },
         contents: [{
@@ -630,23 +731,26 @@ async function transcribeAudio(base64Audio, mimeType = 'audio/webm') {
                         mimeType: mimeType || 'audio/webm',
                         data: base64Audio
                     }
-                },
-                {
-                    text: "Transcribe the spoken audio verbatim."
                 }
             ]
         }],
         generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 120
+            temperature: 0.0,
+            maxOutputTokens: 60
         }
     };
+
+    const IGNORED_PHRASES = new Set([
+        'nospeech', 'no speech', 'none', 'silence', 'music', 'thankyou', 'thankyouforwatching',
+        'subtitles', 'subscribe', 'unknown', 'empty', 'blank', 'noise', 'backgroundnoise',
+        'you', 'bye', 'goodbye'
+    ]);
 
     for (const model of FAST_MODELS) {
         try {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 3500);
+            const timeout = setTimeout(() => controller.abort(), 4500);
 
             const res = await fetch(url, {
                 method: 'POST',
@@ -663,8 +767,8 @@ async function transcribeAudio(base64Audio, mimeType = 'audio/webm') {
             const cleaned = text.trim();
             const lowerClean = cleaned.toLowerCase().replace(/[^a-z]/g, '');
 
-            // Strictly filter out "No speech", "NO_SPEECH", "None", or empty artifacts
-            if (!cleaned || lowerClean === 'nospeech' || lowerClean === 'no speech' || lowerClean.startsWith('nospeech') || cleaned === '.' || cleaned.length < 2) {
+            // Strictly filter out non-speech noise or artifacts
+            if (!cleaned || IGNORED_PHRASES.has(lowerClean) || lowerClean.startsWith('nospeech') || cleaned === '.' || cleaned.length < 2) {
                 return '';
             }
             return normalizeQuestionText(cleaned);
@@ -679,56 +783,101 @@ async function transcribeAudio(base64Audio, mimeType = 'audio/webm') {
 const DANGLING_WORDS = new Set([
   'and', 'or', 'but', 'because', 'so', 'yet', 'while', 'whereas', 'although', 'since', 'if',
   'in', 'on', 'at', 'to', 'for', 'from', 'with', 'without', 'by', 'about', 'into', 'through',
-  'during', 'before', 'after', 'between', 'under', 'against', 'via', 'of',
+  'during', 'before', 'after', 'between', 'under', 'against', 'via', 'of', 'versus', 'vs',
   'the', 'a', 'an', 'this', 'that', 'these', 'those', 'my', 'your', 'our', 'their', 'its',
-  'is', 'are', 'was', 'were', 'do', 'does', 'did', 'have', 'has', 'had', 'can', 'could', 'will', 'would', 'should'
+  'is', 'are', 'was', 'were', 'do', 'does', 'did', 'have', 'has', 'had', 'can', 'could', 'will', 'would', 'should',
+  'which', 'who', 'whom', 'whose', 'where', 'when', 'how', 'what', 'why',
+  'which is', 'that is', 'such as', 'like', 'in terms of', 'related to', 'as well as', 'instead of'
 ]);
+
+// Compound modifiers that require a subsequent noun (e.g. "Dependency Injection", "Virtual DOM", "SOLID principles")
+const INCOMPLETE_MODIFIERS = new Set([
+  'dependency', 'virtual', 'shadow', 'solid', 'entity', 'stored', 'action', 
+  'model', 'view', 'change', 'single', 'cross', 'rest', 'web', 'object',
+  'high', 'low', 'first', 'second', 'primary', 'secondary', 'abstract', 'derived',
+  'micro', 'continuous', 'asynchronous', 'synchronous', 'distributed', 'relational'
+]);
+
+// Non-question conversational patterns, video narration, greetings, or test phrases that must NEVER trigger answer generation
+const NON_QUESTION_PREFIXES = /^(welcome|in this video|in today'?s|today we|let'?s|i will|we will|we are|as you can see|here is|there is|thank you|thanks|hello|hi everyone|good morning|good afternoon|can you hear me|am i audible|are you there|can you see my screen|is my screen visible|just checking)\b/i;
+const CASUAL_PHRASES = /^(how are you|how'?s it going|how are things|can you hear me|am i audible|are you able to hear|are you there|what is your name)\b/i;
 
 /**
  * Checks if the interviewer's transcript represents a complete technical question or prompt requiring an answer.
- * Rejects trailing fragments like "What is", "Can you explain the", "What are" to prevent premature answer triggers.
+ * Strictly rejects trailing fragments like "What is", casual conversation, or lecture narration to prevent premature or irrelevant answers.
  */
 function isInterviewerQuestion(text) {
     if (!text || !text.trim()) return false;
     const clean = text.trim();
+    if (clean.length < 5) return false;
+
+    // 1. Immediately reject video narration, greetings, screen checks, or casual remarks
+    if (NON_QUESTION_PREFIXES.test(clean) || CASUAL_PHRASES.test(clean)) {
+        return false;
+    }
+
     const words = clean.split(/\s+/);
     if (words.length < 2) return false;
 
-    // Filter trailing punctuation to check last word
+    // 2. Reject trailing dangling connectors or incomplete compound modifiers (e.g. "What is", "What is Dependency")
     const lastWord = words[words.length - 1].toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (DANGLING_WORDS.has(lastWord)) {
-        return false; // Trailing connector (e.g. "What is", "Can you explain the") -> INCOMPLETE!
+    if (DANGLING_WORDS.has(lastWord) || INCOMPLETE_MODIFIERS.has(lastWord)) {
+        return false;
     }
 
-    // Direct question mark with at least 3 words: e.g. "What is DOM?", "What is CORS?"
-    if (clean.includes('?') && words.length >= 3) {
-        return true;
+    if (words.length >= 2) {
+        const lastTwo = words.slice(-2).map(w => w.toLowerCase().replace(/[^a-z0-9]/g, '')).join(' ');
+        if (DANGLING_WORDS.has(lastTwo)) {
+            return false;
+        }
     }
 
     const lower = clean.toLowerCase();
-    const questionStarters = /^(what|how|why|when|where|which|who|can you|could you|would you|have you|did you|tell me|explain|describe|walk me through|differentiate|define|talk about|what about)/i;
+    const techMarkers = [
+        'rag', 'llm', 'llms', 'vector', 'embeddings', 'langchain', 'semantic search', 'fine-tuning',
+        'react', 'angular', 'c#', 'csharp', 'asp.net', 'mvc', 'sql', 'azure', 'oop', 'linq',
+        'polymorphism', 'encapsulation', 'inheritance', 'abstraction', 'generics', 'delegates', 'events', 'interfaces',
+        'component', 'components', 'hooks', 'virtual dom', 'fiber', 'dependency injection', 'ioc',
+        'middleware', 'entity framework', 'ef core', 'dbcontext', 'index', 'indexes', 'stored procedure', 'deadlock', 'deadlocks',
+        'blob storage', 'service bus', 'key vault', 'solid', 'docker', 'kubernetes', 'microservices',
+        'fragments', 'props', 'state', 'cors', 'async', 'await', 'api', 'dom', 'clr', 'kestrel', 'blazor', 'signals', 'rxjs'
+    ];
 
-    // Question starter with at least 3 substantive words (not ending in dangling connector):
-    // e.g. "What is polymorphism", "What is CORS", "What is an API", "Explain dependency injection"
-    if (questionStarters.test(lower) && words.length >= 3) {
+    // 3. Ultra-short 3-word questions: "What is X", "What are X", "Define X", "Explain X"
+    if (words.length === 3 && /^(what is|what are|define|explain)\b/i.test(lower)) {
+        const subject = words[2].toLowerCase().replace(/[^a-z0-9#+]/g, '');
+        const isKnownTopic = techMarkers.some(m => m === subject || m.includes(subject) || subject.includes(m));
+        return isKnownTopic;
+    }
+
+    // 4. Questions with explicit question mark (?) and substantive interrogative structure
+    if (clean.includes('?') && words.length >= 3) {
+        // Ensure not casual question
+        if (CASUAL_PHRASES.test(clean)) return false;
         return true;
     }
 
-    // Direct concise topic prompts (2 to 6 words): e.g. "Controlled and uncontrolled components", "Fragments in React", "SOLID principles"
-    if (words.length >= 2 && words.length <= 6) {
-        const techMarkers = [
-            'react', 'angular', 'c#', 'csharp', 'asp.net', 'mvc', 'sql', 'azure', 'oop', 'linq',
-            'component', 'hooks', 'virtual dom', 'fiber', 'dependency injection', 'ioc',
-            'middleware', 'entity framework', 'ef core', 'index', 'stored procedure', 'deadlock',
-            'blob storage', 'service bus', 'key vault', 'solid', 'docker', 'kubernetes', 'microservices',
-            'fragments', 'props', 'state', 'cors', 'async', 'await'
-        ];
+    const questionStarters = /^(what|how|why|when|where|which|who|can you|could you|would you|have you|did you|tell me|explain|describe|walk me through|differentiate|define|talk about|what about)\b/i;
+
+    // 5. Open interrogative clauses that require a predicate (e.g. "What are...", "What is the difference...", "How does...")
+    if (/^(can you explain how|explain how|what is the difference|what are the|how does|how do we|how can|what are)\b/i.test(clean) && !clean.includes('?') && words.length < 5) {
+        return false;
+    }
+
+    // 6. Explicit technical question starting with interrogative and having >= 4 substantive words
+    if (questionStarters.test(lower) && words.length >= 4) {
+        return true;
+    }
+
+    // 7. Imperative technical interview prompts (e.g. "Explain Dependency Injection", "Describe React Fiber", "Compare MVC and Web API")
+    if (/^(explain|describe|walk me through|compare|differentiate|define)\b/i.test(clean) && words.length >= 2 && words.length <= 10) {
         for (const marker of techMarkers) {
             if (lower.includes(marker)) {
                 return true;
             }
         }
     }
+
     return false;
 }
 

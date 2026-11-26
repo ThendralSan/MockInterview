@@ -40,6 +40,15 @@ Thumbs.db
 Desktop.ini
 Desktop (create shortcut)
 
+# Local Runtime Data & Uploads
+backend/data/*
+!backend/data/.gitkeep
+backend/uploads/*
+!backend/uploads/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+
 # Log Files
 npm-debug.log*
 yarn-debug.log*

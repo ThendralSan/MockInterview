@@ -46,6 +46,15 @@
         🎧 Headset: {{ preferences.audioSettings.autoTts ? 'ON' : 'OFF' }}
       </button>
 
+      <!-- Knowledge Base Modal Toggle -->
+      <button 
+        class="action-btn kb-header-btn" 
+        [class.active]="showKnowledgeModal"
+        (click)="openKnowledgeModal()"
+        title="Open Knowledge Base & Prepared Answers">
+        📚 Knowledge Base
+      </button>
+
       <!-- History Drawer Toggle -->
       <button 
         class="action-btn history-toggle-btn"
@@ -96,7 +105,8 @@
           <div *ngIf="!isMeetingLive" class="video-placeholder">
             <span class="placeholder-icon">🖥️</span>
             <h4>Dual Audio Separation</h4>
-            <p>Captures Interviewer from meeting tab audio (Zoom/Teams/Meet/YouTube) and your speech from microphone.</p>
+            <p>Captures Interviewer from meeting audio (Zoom/Teams/Meet/YouTube/Translation Sites) and your speech from microphone.</p>
+            <p class="placeholder-tip">💡 Tip: Select <strong>Entire Screen</strong> and check <strong>Also share system audio</strong> to capture audio from all tabs and apps.</p>
             <button class="primary-live-btn" (click)="startDualMeetingSession()">
               ▶ Start Dual Audio Capture
             </button>
@@ -163,12 +173,20 @@
           </div>
 
           <div class="toolbar-actions">
+            <!-- Candidate Mic Mute Toggle -->
+            <button 
+              class="mini-pill" 
+              [class.active-warning]="candidateMicMuted"
+              (click)="toggleCandidateMic()" 
+              title="Mute or unmute candidate microphone">
+              {{ candidateMicMuted ? '🔇 Mic: Muted' : '🎙️ Mic: Active' }}
+            </button>
             <!-- Mic sensitivity pill -->
             <button 
               class="mini-pill" 
               (click)="cycleMicSensitivity()" 
               title="Mic sensitivity booster">
-              ⚡ Mic: {{ micSensitivityLevel }}
+              ⚡ Gain: {{ micSensitivityLevel }}
             </button>
             <button 
               *ngIf="conversationMessages.length > 0" 
@@ -209,7 +227,7 @@
               <span *ngIf="msg.isQuestion" class="question-chip">❓ Question</span>
             </div>
             <div class="bubble-body">
-              {{ msg.text }}
+              {{ msg.text }}<span *ngIf="msg.isStreaming" class="stream-cursor-pulse">▌</span>
             </div>
             <!-- Quick action: generate answer directly for this interviewer question -->
             <div class="bubble-footer">
@@ -230,7 +248,16 @@
               <span class="my-voice-chip">My Voice</span>
             </div>
             <div class="bubble-body">
-              {{ msg.text }}
+              {{ msg.text }}<span *ngIf="msg.isStreaming" class="stream-cursor-pulse">▌</span>
+            </div>
+            <!-- Quick action: Generate Answer for repeated question -->
+            <div class="bubble-footer">
+              <button 
+                class="answer-this-btn candidate-generate-btn" 
+                (click)="triggerAnswerForMessage(msg)" 
+                title="Generate interview answer for this question">
+                ⚡ Generate Answer
+              </button>
             </div>
           </div>
         </div>
@@ -261,84 +288,210 @@
     <!-- ======================================================== -->
     <section class="copilot-answer-pane">
       
-      <!-- TARGET QUESTION BANNER -->
+      <!-- TARGET QUESTION BANNER & VIEW SWITCHER -->
       <div class="target-question-card">
         <div class="target-top-row">
-          <span class="target-label">🎯 Active Question:</span>
-          <span *ngIf="aiResponse?.category" class="category-badge" [ngClass]="'badge-' + (aiResponse!.category.toLowerCase().replace(' ', '-'))">
-            {{ aiResponse!.category }}
-          </span>
-          <span *ngIf="aiResponse?.latencyMs" class="latency-pill">
-            ⚡ {{ (aiResponse!.latencyMs! / 1000) | number:'1.1-2' }}s
-          </span>
+          <div class="target-left-meta">
+            <span class="target-label">🎯 Active Question:</span>
+            <span *ngIf="aiResponse?.category || ragResponse?.category" class="category-badge" [ngClass]="'badge-' + ((ragResponse?.category || aiResponse?.category || 'general').toLowerCase().replace(' ', '-'))">
+              {{ ragResponse?.category || aiResponse?.category }}
+            </span>
+            <span *ngIf="aiResponse?.latencyMs" class="latency-pill" title="AI Generation Latency">
+              ⚡ {{ (aiResponse!.latencyMs! / 1000) | number:'1.1-2' }}s
+            </span>
+          </div>
+
+          <!-- Engine View Switcher -->
+          <div class="engine-view-switcher">
+            <button 
+              class="view-toggle-btn" 
+              [class.active]="answerViewMode === 'DUAL'"
+              (click)="answerViewMode = 'DUAL'"
+              title="Show both Prepared and AI answers side-by-side">
+              ⊞ Dual View
+            </button>
+            <button 
+              class="view-toggle-btn" 
+              [class.active]="answerViewMode === 'RAG_ONLY'"
+              (click)="answerViewMode = 'RAG_ONLY'"
+              title="Show Prepared Answer only">
+              📘 Prepared (RAG)
+            </button>
+            <button 
+              class="view-toggle-btn" 
+              [class.active]="answerViewMode === 'AI_ONLY'"
+              (click)="answerViewMode = 'AI_ONLY'"
+              title="Show Senior AI Model answer only">
+              🤖 Senior AI
+            </button>
+          </div>
         </div>
+
         <div class="target-question-text">
-          "{{ aiResponse?.question || activeMeetingQuestion || 'Listening for interviewer question...' }}"
+          "{{ aiResponse?.question || ragResponse?.question || activeMeetingQuestion || 'Listening for interviewer question...' }}"
         </div>
       </div>
 
-      <!-- STREAMING / GENERATING STATE -->
-      <div *ngIf="loading" class="card loading-card">
-        <div class="loader-spinner"></div>
-        <div class="loading-content">
-          <h3>⚡ Structuring Senior-Level Answer...</h3>
-          <p *ngIf="!streamingAnswerText" class="streaming-note">Targeting 7+ years production experience with zero cross-technology bleed...</p>
-          <div *ngIf="streamingAnswerText" class="streaming-live-box">
-            "{{ streamingAnswerText }}"
+      <!-- DUAL ANSWER ENGINE MAIN DISPLAY -->
+      <div class="dual-answer-container" [ngClass]="'mode-' + answerViewMode.toLowerCase()">
+
+        <!-- ============================================ -->
+        <!-- PANEL 1: MY PREPARED ANSWER (RAG ENGINE)     -->
+        <!-- ============================================ -->
+        <div class="engine-panel rag-panel" *ngIf="answerViewMode === 'DUAL' || answerViewMode === 'RAG_ONLY'">
+          <div class="panel-header rag-header">
+            <div class="panel-title-group">
+              <span class="panel-icon">📘</span>
+              <span class="panel-title">My Prepared Answer</span>
+              <span class="engine-chip rag-chip">RAG Knowledge Base</span>
+            </div>
+            
+            <div class="panel-actions">
+              <span *ngIf="ragResponse && ragResponse.confidence" class="confidence-pill" [class.high-confidence]="ragResponse.confidence >= 80" [class.medium-confidence]="ragResponse.confidence < 80">
+                🎯 {{ ragResponse.confidence }}% Match
+              </span>
+              <button 
+                *ngIf="ragResponse?.answer" 
+                class="icon-btn" 
+                (click)="speakAnswer(ragResponse!.answer)"
+                title="Play prepared answer in headset">
+                🔊 Audio
+              </button>
+              <button 
+                *ngIf="ragResponse?.answer" 
+                class="icon-btn" 
+                (click)="copyToClipboard(ragResponse!.answer, 'Prepared Answer')"
+                title="Copy prepared answer">
+                📋 Copy
+              </button>
+            </div>
+          </div>
+
+          <!-- Source metadata row -->
+          <div *ngIf="ragResponse" class="rag-meta-bar">
+            <span class="rag-source-tag">📄 Source: {{ ragResponse.sourceName || 'Knowledge Base' }}</span>
+            <span class="rag-strategy-tag">Strategy: {{ ragResponse.strategy }}</span>
+            <span *ngIf="ragResponse.durationMs" class="rag-time-tag">⏱️ {{ ragResponse.durationMs }}ms</span>
+          </div>
+
+          <div class="panel-content-scroll">
+            <!-- Loading State -->
+            <div *ngIf="ragLoading" class="panel-loading-state">
+              <div class="loader-spinner rag-spinner"></div>
+              <h4>Searching Knowledge Base...</h4>
+              <p class="panel-subtext">Checking exact phrases and semantic vector similarity...</p>
+            </div>
+
+            <!-- Prepared Answer Found -->
+            <div *ngIf="!ragLoading && ragResponse" class="rag-body">
+              <p class="spoken-text rag-text">
+                {{ ragResponse.answer }}
+              </p>
+
+              <!-- Optional Code Snippet -->
+              <div *ngIf="ragResponse.code && (ragResponse.code.snippet || ragResponse.code)" class="code-container">
+                <div class="code-header">
+                  <span class="code-lang">💻 Code</span>
+                  <button class="icon-btn" (click)="copyToClipboard(ragResponse.code.snippet || ragResponse.code, 'Code')">Copy</button>
+                </div>
+                <pre class="code-block"><code>{{ ragResponse.code.snippet || ragResponse.code }}</code></pre>
+              </div>
+            </div>
+
+            <!-- Prepared Answer Not Found / Empty -->
+            <div *ngIf="!ragLoading && !ragResponse" class="panel-empty-state">
+              <span class="empty-emoji">📂</span>
+              <h4>{{ (aiResponse || activeMeetingQuestion) ? 'No Prepared Answer Found' : 'Prepared Knowledge Base Ready' }}</h4>
+              <p *ngIf="aiResponse || activeMeetingQuestion" class="empty-explanation">
+                No matching notes found for this question. The Senior AI model is generating a response on the right.
+              </p>
+              <p *ngIf="!aiResponse && !activeMeetingQuestion" class="empty-explanation">
+                Upload your interview notes (.pdf, .md) or add questions in the Knowledge Base to get instant prepared answers.
+              </p>
+              <button class="manage-kb-btn" (click)="openKnowledgeModal()">
+                📚 Manage Knowledge Base
+              </button>
+            </div>
           </div>
         </div>
-      </div>
 
-      <!-- MAIN ANSWER CARD (HANDS-ON PRODUCTION ANSWER) -->
-      <div *ngIf="aiResponse && !loading" class="card answer-card">
-        <div class="answer-card-header">
-          <span class="answer-card-title">🗣 WHAT TO SAY (Senior Production Experience):</span>
-          <div class="answer-header-actions">
-            <button 
-              *ngIf="ttsSupported" 
-              class="icon-btn" 
-              (click)="speakAnswer(aiResponse.answer)"
-              title="Play answer in headset">
-              🔊 Audio
-            </button>
-            <button 
-              class="icon-btn" 
-              (click)="copyToClipboard(aiResponse.answer, 'Answer')"
-              title="Copy answer to clipboard">
-              📋 Copy
-            </button>
+        <!-- ============================================ -->
+        <!-- PANEL 2: AI GENERATED ANSWER (GEMINI ENGINE) -->
+        <!-- ============================================ -->
+        <div class="engine-panel ai-panel" *ngIf="answerViewMode === 'DUAL' || answerViewMode === 'AI_ONLY'">
+          <div class="panel-header ai-header">
+            <div class="panel-title-group">
+              <span class="panel-icon">🤖</span>
+              <span class="panel-title">Senior AI Copilot</span>
+              <span class="engine-chip ai-chip">Gemini Flash-Lite</span>
+            </div>
+
+            <div class="panel-actions">
+              <span *ngIf="aiResponse?.latencyMs" class="latency-pill">
+                ⚡ {{ (aiResponse!.latencyMs! / 1000) | number:'1.1-2' }}s
+              </span>
+              <button 
+                *ngIf="aiResponse?.answer" 
+                class="icon-btn" 
+                (click)="speakAnswer(aiResponse!.answer)"
+                title="Play AI answer in headset">
+                🔊 Audio
+              </button>
+              <button 
+                *ngIf="aiResponse?.answer" 
+                class="icon-btn" 
+                (click)="copyToClipboard(aiResponse!.answer, 'AI Answer')"
+                title="Copy AI answer">
+                📋 Copy
+              </button>
+            </div>
+          </div>
+
+          <div class="panel-content-scroll">
+            <!-- Loading / Streaming State -->
+            <div *ngIf="loading" class="panel-loading-state">
+              <div class="loader-spinner ai-spinner"></div>
+              <h4>⚡ Structuring Senior-Level Answer...</h4>
+              <p *ngIf="!streamingAnswerText" class="panel-subtext">Targeting 7+ years production experience with zero cross-technology bleed...</p>
+              <div *ngIf="streamingAnswerText" class="streaming-live-box">
+                "{{ streamingAnswerText }}"
+              </div>
+            </div>
+
+            <!-- AI Answer Populated -->
+            <div *ngIf="!loading && aiResponse" class="ai-body">
+              <div class="ai-section-label">🗣 WHAT TO SAY (Senior Production Experience):</div>
+              <p class="spoken-text">
+                {{ aiResponse.answer }}
+              </p>
+
+              <!-- Key Points / Takeaways -->
+              <div *ngIf="aiResponse.bulletPoints && aiResponse.bulletPoints.length > 0" class="cues-section">
+                <span class="cues-title">Key Points / Takeaways:</span>
+                <ul class="cues-list">
+                  <li *ngFor="let point of aiResponse.bulletPoints">{{ point }}</li>
+                </ul>
+              </div>
+
+              <!-- Code Snippet -->
+              <div *ngIf="aiResponse.code && aiResponse.code.snippet" class="code-container">
+                <div class="code-header">
+                  <span class="code-lang">💻 Code ({{ aiResponse.code.language | uppercase }})</span>
+                  <button class="icon-btn" (click)="copyToClipboard(aiResponse.code.snippet, 'Code')">Copy</button>
+                </div>
+                <pre class="code-block"><code>{{ aiResponse.code.snippet }}</code></pre>
+              </div>
+            </div>
+
+            <!-- AI Empty State -->
+            <div *ngIf="!loading && !aiResponse" class="panel-empty-state">
+              <span class="empty-emoji">🎯</span>
+              <h4>ParakeetAI Copilot Ready</h4>
+              <p class="empty-explanation">Interviewer questions automatically trigger independent real-time answers from both engines simultaneously.</p>
+            </div>
           </div>
         </div>
 
-        <!-- The Spoken Answer -->
-        <p class="spoken-text">
-          {{ aiResponse.answer }}
-        </p>
-
-        <!-- Quick Mental Anchors / Takeaways -->
-        <div *ngIf="aiResponse.bulletPoints && aiResponse.bulletPoints.length > 0" class="cues-section">
-          <span class="cues-title">Key Points / Takeaways:</span>
-          <ul class="cues-list">
-            <li *ngFor="let point of aiResponse.bulletPoints">{{ point }}</li>
-          </ul>
-        </div>
-
-        <!-- Optional Code Snippet (Only if question asked for code) -->
-        <div *ngIf="aiResponse.code && aiResponse.code.snippet" class="code-container">
-          <div class="code-header">
-            <span class="code-lang">💻 Code ({{ aiResponse.code.language | uppercase }})</span>
-            <button class="icon-btn" (click)="copyToClipboard(aiResponse.code.snippet, 'Code')">Copy Code</button>
-          </div>
-          <pre class="code-block"><code>{{ aiResponse.code.snippet }}</code></pre>
-        </div>
-      </div>
-
-      <!-- EMPTY STATE -->
-      <div *ngIf="!aiResponse && !loading" class="card empty-state-card">
-        <span class="empty-icon">🎯</span>
-        <h3>ParakeetAI Copilot Ready</h3>
-        <p>Click <strong>Start Dual Audio Capture</strong> to connect to your meeting tab and microphone.</p>
-        <p class="empty-tip">Interviewer questions trigger answers automatically. Your speech is logged on the right and never triggers AI generation.</p>
       </div>
 
       <!-- BOTTOM CONTROL BAR & MANUAL QUESTION INPUT -->
@@ -351,6 +504,7 @@
             <span class="status-text">{{ speechStateMessage || 'Ready to capture' }}</span>
           </div>
           <div class="status-right">
+            <span class="manual-fallback-hint">💡 Repeat question with your voice or type below</span>
             <button 
               class="toggle-pill-btn" 
               [class.is-on]="autoAnswerEnabled" 
@@ -360,23 +514,34 @@
           </div>
         </div>
 
-        <!-- Input Row -->
+        <!-- Manual Question Input Row with Generate Answer and Ask Manually -->
         <div class="manual-input-row">
-          <textarea 
-            [(ngModel)]="question" 
-            rows="2" 
-            placeholder="Type a manual question or prompt... (Alt+Enter to send)"
-            (keydown.enter)="$event.preventDefault(); askQuestion()"
-            class="manual-textarea">
-          </textarea>
+          <div class="manual-input-wrapper">
+            <textarea 
+              [(ngModel)]="question" 
+              rows="2" 
+              placeholder="Enter or repeat interviewer's question manually... (Alt+Enter to send)"
+              (keydown.enter)="$event.preventDefault(); askQuestion()"
+              class="manual-textarea">
+            </textarea>
+            <span *ngIf="question.trim()" class="input-clear-btn" (click)="question = ''" title="Clear text">✕</span>
+          </div>
 
           <div class="manual-buttons">
             <button 
               (click)="askQuestion()" 
-              [disabled]="loading || !question.trim()"
-              class="primary-answer-btn"
-              title="Shortcut: Alt+Enter">
-              ⚡ Answer Now
+              [disabled]="loading || (!question.trim() && !activeMeetingQuestion.trim())"
+              class="primary-answer-btn parakeet-magic-btn"
+              title="Generate interview answer immediately (Shortcut: Alt+Enter)">
+              🪄 Answer
+            </button>
+            <button 
+              *ngIf="question.trim()"
+              (click)="askQuestion()" 
+              [disabled]="loading"
+              class="secondary-ask-btn"
+              title="Shortcut: Enter">
+              Ask Manually
             </button>
           </div>
         </div>
@@ -454,6 +619,300 @@
       <div class="modal-footer">
         <button class="secondary-btn" (click)="showSettingsModal = false">Cancel</button>
         <button class="primary-btn" (click)="savePreferences()">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================== -->
+  <!-- KNOWLEDGE BASE & DOCUMENT MANAGEMENT MODAL               -->
+  <!-- ======================================================== -->
+  <div *ngIf="showKnowledgeModal" class="modal-backdrop">
+    <div class="modal-card kb-modal-card">
+      
+      <!-- KB Modal Header -->
+      <div class="modal-header">
+        <div class="modal-title-with-badge">
+          <h3>📚 Knowledge Base & Document Manager</h3>
+          <span class="kb-count-pill">{{ kbDocuments.length }} Docs · {{ kbQuestions.length }} Questions</span>
+        </div>
+        <button class="icon-btn close-btn" (click)="showKnowledgeModal = false">✕</button>
+      </div>
+
+      <!-- KB Navigation Tabs -->
+      <div class="kb-tabs-bar">
+        <button 
+          class="kb-tab-btn" 
+          [class.active]="knowledgeTab === 'UPLOAD'"
+          (click)="knowledgeTab = 'UPLOAD'">
+          📄 Ingest Documents
+        </button>
+        <button 
+          class="kb-tab-btn" 
+          [class.active]="knowledgeTab === 'LIBRARY'"
+          (click)="knowledgeTab = 'LIBRARY'; loadKbQuestions()">
+          📖 Question Library ({{ kbQuestions.length }})
+        </button>
+        <button 
+          class="kb-tab-btn" 
+          [class.active]="knowledgeTab === 'TEST'"
+          (click)="knowledgeTab = 'TEST'">
+          🔍 Live Retrieval Test
+        </button>
+      </div>
+
+      <div class="modal-body kb-modal-body">
+        
+        <!-- ============================================ -->
+        <!-- TAB 1: UPLOAD & INGEST DOCUMENTS             -->
+        <!-- ============================================ -->
+        <div *ngIf="knowledgeTab === 'UPLOAD'" class="kb-tab-pane">
+          <div class="kb-upload-box">
+            <div class="upload-dropzone">
+              <span class="upload-icon">📁</span>
+              <h4>Upload PDF or Markdown Interview Preparation Files</h4>
+              <p>Supports .pdf and .md files with interview Q&A pairs (e.g. "Q: ... A: ..." or "## Question").</p>
+              
+              <div class="upload-inputs-row">
+                <input 
+                  type="file" 
+                  accept=".pdf,.md,.txt" 
+                  #kbFileInput 
+                  (change)="onFileSelected($event)" 
+                  class="file-input-hidden" 
+                  id="kbDocFile" />
+                <label for="kbDocFile" class="select-file-btn">
+                  {{ kbSelectedFile ? kbSelectedFile.name : 'Choose File (.pdf / .md)' }}
+                </label>
+
+                <select [(ngModel)]="kbUploadCategory" class="kb-select category-select">
+                  <option value="GENERAL">Default Category (Auto-Detect)</option>
+                  <option *ngFor="let cat of kbCategories" [value]="cat.name">{{ cat.name }}</option>
+                </select>
+
+                <button 
+                  class="primary-btn ingest-btn" 
+                  [disabled]="!kbSelectedFile || kbIsUploading"
+                  (click)="uploadKbFile()">
+                  <span *ngIf="!kbIsUploading">⚡ Ingest & Index</span>
+                  <span *ngIf="kbIsUploading">⏳ Processing...</span>
+                </button>
+              </div>
+
+              <!-- Upload Status Message -->
+              <div *ngIf="kbUploadStatus" class="upload-status-alert" [class.status-error]="kbUploadStatus.includes('failed') || kbUploadStatus.includes('error')">
+                {{ kbUploadStatus }}
+              </div>
+            </div>
+          </div>
+
+          <!-- Uploaded Documents Table -->
+          <div class="kb-section-header">
+            <h4>Indexed Documents ({{ kbDocuments.length }})</h4>
+            <button class="secondary-btn mini-btn" (click)="loadKbDocuments()">🔄 Refresh</button>
+          </div>
+
+          <div class="kb-table-wrapper" *ngIf="kbDocuments.length > 0">
+            <table class="kb-table">
+              <thead>
+                <tr>
+                  <th>Filename</th>
+                  <th>Type</th>
+                  <th>Size</th>
+                  <th>Q&A Pairs</th>
+                  <th>Indexed Date</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr *ngFor="let doc of kbDocuments">
+                  <td class="filename-cell">📄 {{ doc.filename }}</td>
+                  <td><span class="type-badge">{{ doc.file_type | uppercase }}</span></td>
+                  <td>{{ (doc.file_size / 1024) | number:'1.0-1' }} KB</td>
+                  <td><strong>{{ doc.parsed_questions_count !== undefined ? doc.parsed_questions_count : (doc.parsed_count || 0) }}</strong> Qs</td>
+                  <td>{{ doc.created_at | date:'short' }}</td>
+                  <td><span class="status-badge-indexed">{{ doc.status }}</span></td>
+                  <td class="actions-cell">
+                    <button class="mini-action-btn reindex-btn" (click)="reindexKbDocument(doc.id, $event)" title="Re-extract and re-embed">🔄 Re-index</button>
+                    <button class="mini-action-btn delete-btn" (click)="deleteKbDocument(doc.id, $event)" title="Delete document">🗑 Delete</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div *ngIf="kbDocuments.length === 0" class="kb-empty-inline">
+            <p>No documents uploaded yet. Upload your PDF or Markdown notes above to populate the Knowledge Base.</p>
+          </div>
+        </div>
+
+        <!-- ============================================ -->
+        <!-- TAB 2: QUESTION LIBRARY & MANUAL CRUD        -->
+        <!-- ============================================ -->
+        <div *ngIf="knowledgeTab === 'LIBRARY'" class="kb-tab-pane">
+          <div class="library-toolbar">
+            <div class="library-filters">
+              <select [(ngModel)]="kbCategoryFilter" (change)="loadKbQuestions()" class="kb-select">
+                <option value="ALL">All Categories</option>
+                <option *ngFor="let cat of kbCategories" [value]="cat.name">{{ cat.name }}</option>
+              </select>
+
+              <div class="search-input-wrapper">
+                <input 
+                  type="text" 
+                  placeholder="Filter questions..." 
+                  [(ngModel)]="kbSearchFilter" 
+                  (keyup.enter)="loadKbQuestions()" 
+                  class="kb-search-input" />
+                <button class="search-btn" (click)="loadKbQuestions()">Search</button>
+              </div>
+            </div>
+
+            <button class="primary-btn add-qa-btn" (click)="openAddQuestionModal()">
+              ➕ Add New Q&A
+            </button>
+          </div>
+
+          <div class="questions-list-container" *ngIf="kbQuestions.length > 0">
+            <div *ngFor="let q of kbQuestions" class="kb-question-card">
+              <div class="q-card-top">
+                <span class="category-badge" [ngClass]="'badge-' + ((q.category || 'general').toLowerCase().replace(' ', '-'))">
+                  {{ q.category || 'GENERAL' }}
+                </span>
+                <span class="source-tag">📄 {{ q.source_name || 'Manual Entry' }}</span>
+                <div class="q-card-actions">
+                  <button class="icon-btn" (click)="openAddQuestionModal(q)" title="Edit">✏️ Edit</button>
+                  <button class="icon-btn delete-icon" (click)="deleteKbQuestion(q.id, $event)" title="Delete">🗑</button>
+                </div>
+              </div>
+
+              <div class="q-card-question">
+                <strong>Q:</strong> {{ q.question }}
+              </div>
+
+              <div class="q-card-answer">
+                <strong>A:</strong> {{ q.answer }}
+              </div>
+            </div>
+          </div>
+
+          <div *ngIf="kbQuestions.length === 0" class="kb-empty-inline">
+            <p>No questions found. Try choosing a different category or click "➕ Add New Q&A" to add one.</p>
+          </div>
+        </div>
+
+        <!-- ============================================ -->
+        <!-- TAB 3: LIVE TEST & RETRIEVAL PREVIEW         -->
+        <!-- ============================================ -->
+        <div *ngIf="knowledgeTab === 'TEST'" class="kb-tab-pane">
+          <div class="test-search-box">
+            <h4>Live RAG Retrieval Tester</h4>
+            <p>Enter any interview question below to verify how the retrieval engine matches questions and calculates confidence scores.</p>
+            
+            <div class="test-input-row">
+              <input 
+                type="text" 
+                [(ngModel)]="testQuery" 
+                (keyup.enter)="runTestSearch()"
+                placeholder="e.g. What is Dependency Injection? or Explain React Virtual DOM"
+                class="test-query-input" />
+              <button 
+                class="primary-btn test-run-btn" 
+                [disabled]="!testQuery.trim() || testLoading"
+                (click)="runTestSearch()">
+                <span *ngIf="!testLoading">🔍 Test Retrieval</span>
+                <span *ngIf="testLoading">Searching...</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Test Results Display -->
+          <div *ngIf="testResults" class="test-results-container">
+            <div class="test-result-header" [class.matched]="testResults.isMatch" [class.unmatched]="!testResults.isMatch">
+              <div class="result-status-title">
+                <span *ngIf="testResults.isMatch">✅ Match Found</span>
+                <span *ngIf="!testResults.isMatch">❌ No Confident Match</span>
+              </div>
+              <div class="result-metrics">
+                <span *ngIf="testResults.confidence" class="confidence-pill" [class.high-confidence]="testResults.confidence >= 80" [class.medium-confidence]="testResults.confidence < 80">
+                  {{ testResults.confidence }}% Confidence
+                </span>
+                <span *ngIf="testResults.strategy" class="strategy-badge">{{ testResults.strategy }}</span>
+                <span *ngIf="testResults.durationMs" class="duration-badge">⏱️ {{ testResults.durationMs }}ms</span>
+              </div>
+            </div>
+
+            <!-- Matched Answer Box -->
+            <div *ngIf="testResults.isMatch" class="test-matched-card">
+              <div class="matched-q">
+                <strong>Matched Question:</strong> {{ testResults.question }}
+              </div>
+              <div class="matched-source">
+                <strong>Source:</strong> {{ testResults.sourceName }} · <strong>Category:</strong> {{ testResults.category }}
+              </div>
+              <div class="matched-a">
+                <strong>Prepared Answer:</strong>
+                <p>{{ testResults.answer }}</p>
+              </div>
+            </div>
+
+            <!-- Candidate Matches Breakdown -->
+            <div *ngIf="testResults.candidates && testResults.candidates.length > 0" class="candidates-section">
+              <h5>Top Candidate Matches Evaluated:</h5>
+              <div *ngFor="let cand of testResults.candidates; let i = index" class="candidate-row">
+                <span class="cand-rank">#{{ i + 1 }}</span>
+                <div class="cand-info">
+                  <span class="cand-q">{{ cand.question }}</span>
+                  <span class="cand-meta">Source: {{ cand.sourceName }}</span>
+                </div>
+                <span class="cand-score">{{ ((cand.score || 0) * 100) | number:'1.0-0' }}% Sim</span>
+              </div>
+            </div>
+
+            <div *ngIf="!testResults.isMatch && testResults.message" class="test-fail-reason">
+              {{ testResults.message }}
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="modal-footer">
+        <button class="secondary-btn" (click)="showKnowledgeModal = false">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD / EDIT QUESTION SUB-MODAL -->
+  <div *ngIf="showAddQuestionModal" class="modal-backdrop submodal-backdrop">
+    <div class="modal-card submodal-card">
+      <div class="modal-header">
+        <h3>{{ editingQuestion.id ? '✏️ Edit Question' : '➕ Add Interview Question' }}</h3>
+        <button class="icon-btn" (click)="showAddQuestionModal = false">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="field-group">
+          <label>Category:</label>
+          <select [(ngModel)]="editingQuestion.category" class="modal-input">
+            <option *ngFor="let cat of kbCategories" [value]="cat.name">{{ cat.name }}</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label>Question:</label>
+          <input type="text" [(ngModel)]="editingQuestion.question" placeholder="e.g. What is Dependency Injection in ASP.NET Core?" class="modal-input" />
+        </div>
+        <div class="field-group">
+          <label>Prepared Answer (What to Say):</label>
+          <textarea rows="6" [(ngModel)]="editingQuestion.answer" placeholder="Your prepared senior developer response..." class="modal-input"></textarea>
+        </div>
+        <div class="field-group">
+          <label>Optional Code Snippet:</label>
+          <textarea rows="4" [(ngModel)]="editingQuestion.code" placeholder="Code example (optional)..." class="modal-input code-font"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-btn" (click)="showAddQuestionModal = false">Cancel</button>
+        <button class="primary-btn" (click)="saveQuestion()">Save to Knowledge Base</button>
       </div>
     </div>
   </div>

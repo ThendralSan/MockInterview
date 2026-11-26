@@ -134,7 +134,20 @@ export const TECH_REPLACEMENTS: [RegExp, string][] = [
   [/\b(read is|red is|radish)\b/gi, 'Redis'],
   [/\b(rabbit m q|rabbit mq)\b/gi, 'RabbitMQ'],
   [/\b(micro services|micro service)\b/gi, 'microservices'],
-  [/\b(ci cd|c i c d|c i slash c d|continuous integration)\b/gi, 'CI/CD']
+  [/\b(ci cd|c i c d|c i slash c d|continuous integration)\b/gi, 'CI/CD'],
+
+  // 12. AI / LLM / RAG / Machine Learning & Modern Architecture
+  [/\b(what('s| is| are)? (a |the )?)(rag|wrag|r a g|r\.a\.g\.|our a g|drag|are a g)\b/gi, '$1RAG'],
+  [/\b(retrieval augmented generation|retrieval-augmented generation)\b/gi, 'Retrieval-Augmented Generation (RAG)'],
+  [/\b(r a g architecture|rag architecture|rag pipeline|rag system|rag pattern)\b/gi, 'RAG architecture'],
+  [/\b(what('s| is| are)? (a |an )?)(l l m|l\.l\.m\.|large language model)\b/gi, '$1an LLM'],
+  [/\b(l l m s?|l\.l\.m\.s?)\b/gi, 'LLM'],
+  [/\b(vector db|vector database|vector stores?)\b/gi, 'vector database'],
+  [/\b(semantic search|similarity search)\b/gi, 'semantic search'],
+  [/\b(lang chain|langchain|llama index|llamaindex|semantic kernel)\b/gi, 'LangChain / Semantic Kernel'],
+  [/\b(fine tuning|fine-tuning)\b/gi, 'fine-tuning'],
+  [/\b(prompt engineering)\b/gi, 'prompt engineering'],
+  [/\b(vector embeddings|embeddings)\b/gi, 'embeddings']
 ];
 
 // Words and prepositions that indicate an incomplete or trailing sentence/thought
@@ -144,7 +157,16 @@ export const DANGLING_WORDS = new Set([
   'during', 'before', 'after', 'between', 'under', 'against', 'via', 'of',
   'the', 'a', 'an', 'this', 'that', 'these', 'those', 'my', 'your', 'our', 'their', 'its',
   'is', 'are', 'was', 'were', 'do', 'does', 'did', 'have', 'has', 'had', 'can', 'could', 'will', 'would', 'should',
-  'such as', 'like', 'in terms of', 'related to', 'as well as', 'instead of', 'versus', 'vs'
+  'which', 'who', 'whom', 'whose', 'where', 'when', 'how', 'what', 'why',
+  'which is', 'that is', 'such as', 'like', 'in terms of', 'related to', 'as well as', 'instead of', 'versus', 'vs'
+]);
+
+// Compound modifiers that require a subsequent noun (e.g. "Dependency Injection", "Virtual DOM", "SOLID principles")
+export const INCOMPLETE_MODIFIERS = new Set([
+  'dependency', 'virtual', 'shadow', 'solid', 'entity', 'stored', 'action', 
+  'model', 'view', 'change', 'single', 'cross', 'rest', 'web', 'object',
+  'high', 'low', 'first', 'second', 'primary', 'secondary', 'abstract', 'derived',
+  'micro', 'continuous', 'asynchronous', 'synchronous', 'distributed', 'relational'
 ]);
 
 // Question starters and interrogative phrases common in technical interviews
@@ -160,7 +182,8 @@ const TECH_TOPICS = new Set([
   'model binding', 'action filter', 'razor view', 'azure', 'azure blob storage', 'azure functions', 'azure app service', 'azure key vault', 'azure service bus',
   'angular', 'react', 'rxjs', 'ngrx', 'signals', 'typescript', 'microservices',
   'kubernetes', 'docker', 'kafka', 'redis', 'rabbitmq', 'solid principles',
-  'jwt', 'oauth', 'ci/cd', 'dapper', 'mediatr', 'signalr', 'blazor'
+  'jwt', 'oauth', 'ci/cd', 'dapper', 'mediatr', 'signalr', 'blazor',
+  'rag', 'retrieval-augmented generation', 'llm', 'vector database', 'embeddings', 'semantic search', 'fine-tuning'
 ]);
 
 export type AudioInputSource = 'DUAL_AUDIO' | 'MICROPHONE' | 'SYSTEM_AUDIO';
@@ -195,6 +218,13 @@ export class AudioEngineService {
   // Speech presence flags
   public isInterviewerSpeaking: boolean = false;
   public isCandidateSpeaking: boolean = false;
+  public lastCandidateSpeechTime: number = 0;
+  public lastInterviewerSpeechTime: number = 0;
+
+  // Single in-flight STT concurrency lock (completely eliminates HTTP queue pileup and 30s delays)
+  public isTranscribing: boolean = false;
+  private pendingAudioBlobs: Blob[] = [];
+  private transcribingSafetyTimer: any = null;
 
   // Continuous Tab Audio Slicer state
   private tabAudioStream: MediaStream | null = null;
@@ -214,6 +244,15 @@ export class AudioEngineService {
   }
   public get audioLevel(): number {
     return Math.max(this.interviewerAudioLevel, this.candidateAudioLevel);
+  }
+
+  /**
+   * Evaluates whether digital tab audio (Interviewer speech) is actively playing.
+   * Checks current VAD, energy meter, and an 850ms speech bridge window.
+   */
+  public isTabAudioActive(): boolean {
+    const now = Date.now();
+    return this.isInterviewerSpeaking || this.interviewerAudioLevel > 2.0 || (now - this.lastInterviewerSpeechTime < 850);
   }
 
   // Sensitivity multiplier (default 1.8x)
@@ -237,15 +276,16 @@ export class AudioEngineService {
     // 1. Capture Meeting Tab / Display Media with Audio (raw digital tab audio, no double-filtering)
     try {
       this.displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          displaySurface: 'browser'
-        },
+        video: true,
         audio: {
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false
-        }
-      });
+        },
+        systemAudio: 'include',
+        selfBrowserSurface: 'exclude',
+        surfaceSwitching: 'include'
+      } as any);
     } catch (err: any) {
       console.warn('[AudioEngine] Screen/Tab share cancelled:', err);
       return { success: false, error: 'Screen/Tab sharing was cancelled or denied.' };
@@ -313,8 +353,9 @@ export class AudioEngineService {
         source.connect(this.interviewerGain);
         this.interviewerGain.connect(this.interviewerAnalyser);
 
-        // Start continuous segment capture for Interviewer tab audio
-        this.startContinuousInterviewerCapture(tabAudioStream);
+        // NOTE: In dual audio mode with room speakers, live Web Speech API handles 0ms transcription.
+        // Continuous Gemini audio chunk slicing is disabled to eliminate phantom/hallucinated questions!
+        // this.startContinuousInterviewerCapture(tabAudioStream);
       } catch (e) {
         console.error('[AudioEngine] Error initializing Interviewer AudioContext:', e);
       }
@@ -374,40 +415,21 @@ export class AudioEngineService {
         }
       };
 
-      this.segmentRecorder.onstop = () => {
-        const chunks = this.segmentChunks;
-        this.segmentChunks = [];
-        const maxLevel = this.maxAudioLevelInSegment;
-        const hadSpeech = this.segmentHasSpeech;
+      this.segmentRecorder.start(100);
 
-        // If audio energy was detected (> 2.0 or hadSpeech) and blob is valid, emit for transcription
-        if (chunks.length > 0 && (maxLevel > 2.0 || hadSpeech) && this.isContinuousCaptureActive) {
-          const blob = new Blob(chunks, { type: mime });
-          if (this.onInterviewerSpeechCallback && blob.size > 1200) {
-            this.onInterviewerSpeechCallback(blob);
-          }
-        }
-
-        // Immediately start next segment if still active
-        if (this.isContinuousCaptureActive) {
-          this.recordNextInterviewerSegment();
-        }
-      };
-
-      this.segmentRecorder.start(200);
-
-      // Maximum segment duration (3.5s) to guarantee progressive updates during long speech
+      // Fast micro-segment interval (600ms) ensuring sub-second dispatch to STT
       if (this.segmentTimer) clearTimeout(this.segmentTimer);
       this.segmentTimer = setTimeout(() => {
         this.finalizeInterviewerSegment();
-      }, 3500);
+      }, 600);
 
     } catch (err) {
       console.warn('[AudioEngine] Error starting interviewer segment:', err);
     }
   }
 
-  // Fast Finalization: stops segment immediately when a natural pause (500ms) occurs after speech
+  // Fast Finalization with Zero Gap:
+  // Starts next recording segment immediately while stopping the current one and emitting its blob
   public finalizeInterviewerSegment() {
     if (this.isFinalizingSegment) return;
     this.isFinalizingSegment = true;
@@ -415,15 +437,85 @@ export class AudioEngineService {
       clearTimeout(this.segmentTimer);
       this.segmentTimer = null;
     }
-    if (this.segmentRecorder && this.segmentRecorder.state === 'recording') {
+
+    const currentRecorder = this.segmentRecorder;
+    const currentChunks = [...this.segmentChunks];
+    const hadSpeech = this.segmentHasSpeech;
+    const maxLevel = this.maxAudioLevelInSegment;
+
+    // Immediately start recording the next micro-chunk so 0 audio samples are dropped
+    if (this.isContinuousCaptureActive && this.tabAudioStream) {
+      this.recordNextInterviewerSegment();
+    }
+
+    if (currentRecorder && currentRecorder.state === 'recording') {
+      currentRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) currentChunks.push(e.data);
+      };
+      currentRecorder.onstop = () => {
+        if (currentChunks.length > 0 && (maxLevel > 1.5 || hadSpeech) && this.isContinuousCaptureActive) {
+          const blob = new Blob(currentChunks, { type: currentRecorder.mimeType || 'audio/webm' });
+          if (blob.size > 400) {
+            this.dispatchInterviewerBlob(blob);
+          }
+        }
+      };
       try {
-        this.segmentRecorder.stop();
+        currentRecorder.stop();
       } catch (e) {}
+    }
+  }
+
+  /**
+   * Dispatches interviewer audio blob using a strict single-in-flight concurrency lock.
+   * If a previous STT request is still awaiting response from Gemini, keeps only the latest
+   * audio slice so the system stays synchronized with live speech without creating queue lag!
+   */
+  private dispatchInterviewerBlob(blob: Blob) {
+    if (this.isTranscribing) {
+      this.pendingAudioBlobs = [blob];
+      return;
+    }
+
+    this.isTranscribing = true;
+    if (this.transcribingSafetyTimer) clearTimeout(this.transcribingSafetyTimer);
+    // Safety fallback: if server doesn't respond within 3.5s, unlock
+    this.transcribingSafetyTimer = setTimeout(() => {
+      this.onTranscribeComplete();
+    }, 3500);
+
+    if (this.onInterviewerSpeechCallback) {
+      this.onInterviewerSpeechCallback(blob);
+    }
+  }
+
+  /**
+   * Called when server acknowledges completion of STT (or on error/timeout).
+   * Releases lock and immediately dispatches the newest audio segment if one arrived during processing.
+   */
+  public onTranscribeComplete() {
+    if (this.transcribingSafetyTimer) {
+      clearTimeout(this.transcribingSafetyTimer);
+      this.transcribingSafetyTimer = null;
+    }
+    this.isTranscribing = false;
+
+    if (this.pendingAudioBlobs.length > 0 && this.isContinuousCaptureActive) {
+      const nextBlob = this.pendingAudioBlobs.shift();
+      if (nextBlob) {
+        this.dispatchInterviewerBlob(nextBlob);
+      }
     }
   }
 
   private stopContinuousInterviewerCapture() {
     this.isContinuousCaptureActive = false;
+    this.isTranscribing = false;
+    this.pendingAudioBlobs = [];
+    if (this.transcribingSafetyTimer) {
+      clearTimeout(this.transcribingSafetyTimer);
+      this.transcribingSafetyTimer = null;
+    }
     if (this.segmentTimer) {
       clearTimeout(this.segmentTimer);
       this.segmentTimer = null;
@@ -459,19 +551,23 @@ export class AudioEngineService {
         // Exponential smoothing (low-pass filter)
         this.interviewerAudioLevel = Math.round(this.interviewerAudioLevel * 0.7 + targetIntLevel * 0.3);
 
-        if (this.interviewerAudioLevel > 2.8) {
+        if (this.interviewerAudioLevel > 2.2) {
           this.isInterviewerSpeaking = true;
           this.segmentHasSpeech = true;
           this.segmentLastSpeechTime = now;
+          this.lastInterviewerSpeechTime = now;
         } else {
-          this.isInterviewerSpeaking = false;
-          // FAST NATURAL PAUSE FINALIZATION:
-          // If speech occurred in this segment, and interviewer has now paused for >= 500ms:
-          // Finalize chunk immediately instead of waiting for 3.5s!
+          // Hold speech active for 850ms to bridge syllable micro-pauses and suppress acoustic speaker bleed
+          if (now - this.segmentLastSpeechTime > 850) {
+            this.isInterviewerSpeaking = false;
+          }
+          // NATURAL PAUSE FINALIZATION:
+          // If speech occurred in this segment, and interviewer has now paused for >= 450ms:
+          // Finalize chunk without cutting words or syllables mid-sentence!
           if (this.segmentHasSpeech &&
               !this.isFinalizingSegment &&
-              (now - this.segmentStartTime >= 750) &&
-              (now - this.segmentLastSpeechTime >= 500)) {
+              (now - this.segmentStartTime >= 500) &&
+              (now - this.segmentLastSpeechTime >= 450)) {
             this.finalizeInterviewerSegment();
           }
         }
@@ -496,6 +592,9 @@ export class AudioEngineService {
         // Exponential smoothing
         this.candidateAudioLevel = Math.round(this.candidateAudioLevel * 0.7 + targetCanLevel * 0.3);
         this.isCandidateSpeaking = this.candidateAudioLevel > 3.0;
+        if (this.isCandidateSpeaking) {
+          this.lastCandidateSpeechTime = now;
+        }
       }
 
       this.animFrameId = requestAnimationFrame(updateLoop);
@@ -605,9 +704,16 @@ export class AudioEngineService {
     // Filter out trailing punctuation for grammar checks
     const lastWord = words[words.length - 1].replace(/[^a-z0-9#+.]/g, '');
 
-    // 1. Check if ending on a dangling preposition, conjunction, or auxiliary verb
-    if (DANGLING_WORDS.has(lastWord)) {
-      return { isComplete: false, reason: `Dangling connector: "${lastWord}"` };
+    // 1. Check for non-question video narration, greetings, or casual talk
+    const NON_QUESTION_PREFIXES = /^(welcome|in this video|in today'?s|today we|let'?s|i will|we will|we are|as you can see|here is|there is|thank you|thanks|hello|hi everyone|good morning|good afternoon|can you hear me|am i audible|are you there|can you see my screen|is my screen visible|just checking|elements like|with that we reach|say to improve|look at this|let me show you|in short|first of all)\b/i;
+    const CASUAL_PHRASES = /^(how are you|how'?s it going|how are things|can you hear me|am i audible|are you able to hear|are you there|what is your name)\b/i;
+    if (NON_QUESTION_PREFIXES.test(clean) || CASUAL_PHRASES.test(clean)) {
+      return { isComplete: false, reason: 'Non-question conversational remark' };
+    }
+
+    // 2. Check if ending on a dangling preposition, conjunction, auxiliary verb, or compound modifier
+    if (DANGLING_WORDS.has(lastWord) || INCOMPLETE_MODIFIERS.has(lastWord)) {
+      return { isComplete: false, reason: `Dangling connector or modifier: "${lastWord}"` };
     }
 
     // Check last two words for compound dangling phrases (e.g. "such as", "in terms of")
@@ -618,12 +724,12 @@ export class AudioEngineService {
       }
     }
 
-    // 2. Direct recognized technical topics (even as single or double words, e.g. "CORS", "CORS policy", "Async and await")
+    // 3. Direct recognized technical topics (even as single or double words, e.g. "CORS", "RAG", "Async and await")
     if (TECH_TOPICS.has(lower) || (words.length <= 3 && TECH_TOPICS.has(lastWord))) {
       return { isComplete: true, reason: `Direct technical topic prompt: "${clean}"` };
     }
 
-    // 3. Ultra-concise imperative requests: e.g. "Explain middleware", "Define DOM", "What about CORS"
+    // 4. Ultra-concise imperative requests: e.g. "Explain middleware", "Define DOM", "What about CORS"
     if (words.length >= 2) {
       const firstWord = words[0];
       const subject = words.slice(1).join(' ').toLowerCase();
@@ -636,20 +742,23 @@ export class AudioEngineService {
     const hasQuestionStarter = QUESTION_STARTERS.test(clean);
     const hasQuestionMark = clean.includes('?');
 
-    // 4. Open interrogative clauses that require a predicate (e.g. "Can you explain how...", "How does...", "What is the difference...")
+    // 5. Open interrogative clauses that require a predicate (e.g. "Can you explain how...", "How does...", "What is the difference...")
     if (/^(can you explain how|explain how|what is the difference|how does|how do we|how can)/i.test(clean) && !hasQuestionMark && words.length < 5) {
       return { isComplete: false, reason: 'Open interrogative missing predicate' };
     }
 
-    // 5. Short Technical Questions (3+ words) like:
-    // "What is CORS?", "What is DOM?", "What is an API?", "What is Middleware?", "What is Entity Framework?", "What is Dependency Injection?"
-    if (words.length >= 3 && hasQuestionStarter) {
-      return { isComplete: true, reason: `Complete short question: "${clean}"` };
+    // 6. Short Technical Questions (3 words) like: "What is CORS?", "What is RAG?"
+    if (words.length === 3 && /^(what is|what are|define|explain)\b/i.test(lower)) {
+      const subject = words[2].toLowerCase().replace(/[^a-z0-9#+]/g, '');
+      if (TECH_TOPICS.has(subject) || hasQuestionMark) {
+        return { isComplete: true, reason: `Complete short question: "${clean}"` };
+      }
+      return { isComplete: false, reason: `Non-technical subject in 3-word query: "${subject}"` };
     }
 
-    // 6. Standard questions with question mark or 4+ words with question starter or 7+ substantive words
-    if (hasQuestionMark || (hasQuestionStarter && words.length >= 4) || words.length >= 7) {
-      return { isComplete: true, reason: 'Complete sentence structure' };
+    // 7. Standard technical questions with question mark or 4+ words starting with an interrogative
+    if ((hasQuestionMark && words.length >= 3) || (hasQuestionStarter && words.length >= 4)) {
+      return { isComplete: true, reason: 'Complete technical question' };
     }
 
     return { isComplete: false, reason: 'Awaiting complete thought' };
